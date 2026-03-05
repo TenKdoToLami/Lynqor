@@ -27,3 +27,4 @@ argon2 = "0.5.3"
 aes-gcm = "0.10.3"
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
 rand = "0.8.5"
+tauri-plugin-dialog = "2"

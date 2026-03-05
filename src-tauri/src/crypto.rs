@@ -34,7 +34,9 @@ pub fn encrypt_aes_gcm(key: &[u8], plaintext: &[u8]) -> Vec<u8> {
     let mut nonce_bytes = [0u8; 12];
     rand::thread_rng().fill(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
-    let mut ciphertext = cipher.encrypt(nonce, plaintext).expect("encryption failure!");
+    let mut ciphertext = cipher
+        .encrypt(nonce, plaintext)
+        .expect("encryption failure!");
     let mut result = nonce_bytes.to_vec();
     result.append(&mut ciphertext);
     result
