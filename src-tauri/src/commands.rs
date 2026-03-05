@@ -8,6 +8,7 @@ use crate::crypto::{
 };
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Folder {
     pub id: String,
     pub parent_id: Option<String>,
@@ -17,6 +18,7 @@ pub struct Folder {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Item {
     pub id: String,
     pub folder_id: Option<String>,
@@ -206,17 +208,39 @@ pub fn save_image(
 }
 
 #[tauri::command]
-pub fn get_image_path(
+pub fn get_image_base64(
     app_handle: tauri::AppHandle,
     filename: String,
 ) -> Result<String, String> {
+    use std::io::Read;
     let app_dir = app_handle.path().app_data_dir().unwrap();
     let full_path = app_dir.join("images").join(&filename);
-    if full_path.exists() {
-        Ok(full_path.to_string_lossy().to_string())
-    } else {
-        Err("Image not found".to_string())
+    if !full_path.exists() {
+        return Err("Image not found".to_string());
     }
+
+    let mut file = std::fs::File::open(&full_path).map_err(|e| e.to_string())?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+
+    let ext = full_path.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+    
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        _ => "image/png",
+    };
+
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&buffer);
+    Ok(format!("data:{};base64,{}", mime, b64))
 }
 
 #[tauri::command]

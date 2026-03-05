@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tauri-app",
+  "productName": "Lynqor",
   "version": "0.1.0",
-  "identifier": "com.honza.tauri-app",
+  "identifier": "com.honza.lynqor",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,9 +12,10 @@
   "app": {
     "windows": [
       {
-        "title": "tauri-app",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "title": "Lynqor",
+        "width": 1000,
+        "height": 700
       }
     ],
     "security": {
