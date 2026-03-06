@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, ask } from "@tauri-apps/plugin-dialog";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { Folder, Item, ItemType } from "./types";
 import {
@@ -17,7 +17,12 @@ import {
   ArrowLeft,
   Trash2,
   ExternalLink,
-  ImagePlus
+  ImagePlus,
+  Bold,
+  Italic,
+  Heading,
+  Code,
+  Link as LinkIcon
 } from "lucide-react";
 import { cn } from "./utils";
 
@@ -30,7 +35,7 @@ function parseItemContent(content: string): { url: string; body: string } {
   }
 }
 
-const DETAIL_WIDTH = 550;
+const DETAIL_WIDTH = 650;
 
 export default function App() {
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -94,8 +99,8 @@ export default function App() {
         if (!detail) return;
         const pos = await mainWindow.outerPosition();
         const size = await mainWindow.outerSize();
-        await detail.setPosition({ type: "Physical", x: pos.x + size.width, y: pos.y });
-        await detail.setSize({ type: "Physical", width: DETAIL_WIDTH, height: size.height });
+        await detail.setPosition(new PhysicalPosition(pos.x + size.width, pos.y));
+        await detail.setSize(new PhysicalSize(DETAIL_WIDTH, size.height));
       } catch { /* detail window might not exist */ }
     };
 
@@ -136,7 +141,16 @@ export default function App() {
   };
 
   const handleDeleteFolder = async (folderId: string) => {
-    try { await invoke("delete_folder", { id: folderId }); loadData(); } catch (e) { alert("Failed to delete folder: " + e); }
+    try {
+      const confirmed = await ask("Are you sure you want to delete this folder? This will delete all its contents and cannot be undone.", {
+        title: "Delete Folder",
+        kind: "warning",
+      });
+      if (confirmed) {
+        await invoke("delete_folder", { id: folderId });
+        loadData();
+      }
+    } catch (e) { alert("Failed to delete folder: " + e); }
   };
 
   const pickImage = async (): Promise<string> => {
@@ -366,21 +380,103 @@ export default function App() {
                 <input type="url" value={newItemUrl} onChange={e => setNewItemUrl(e.target.value)} placeholder="https://" className="w-full bg-black/20 border border-emerald-500/30 rounded-2xl px-5 py-3.5 text-emerald-100 placeholder-emerald-900/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 shadow-inner" />
               </div>
               <div>
-                <label className="text-sm font-semibold text-pink-300/80 mb-2 block ml-1">Preview Image</label>
-                <button onClick={async () => { const f = await pickImage(); if (f) setNewItemImageFilename(f); }} className="w-full bg-black/20 border border-pink-500/30 rounded-2xl px-5 py-3.5 text-left flex items-center gap-3 hover:bg-black/30">
+                <label className="text-sm font-semibold text-pink-300/80 mb-2 block ml-1">Preview Image (Click & Paste supported)</label>
+                <button
+                  type="button"
+                  onClick={async () => { const f = await pickImage(); if (f) setNewItemImageFilename(f); }}
+                  onPaste={async (e) => {
+                    const items = e.clipboardData.items;
+                    for (let i = 0; i < items.length; i++) {
+                      if (items[i].type.indexOf('image') !== -1) {
+                        e.preventDefault();
+                        const file = items[i].getAsFile();
+                        if (!file) continue;
+                        const reader = new FileReader();
+                        reader.onload = async (event) => {
+                          const base64Data = event.target?.result as string;
+                          try {
+                            const filename = await invoke<string>("save_base64_image", { base64Data });
+                            setNewItemImageFilename(filename);
+                          } catch (err) { alert("Failed to save pasted image: " + err); }
+                        };
+                        reader.readAsDataURL(file);
+                        break;
+                      }
+                    }
+                  }}
+                  className="w-full bg-black/20 border border-pink-500/30 rounded-2xl px-5 py-3.5 text-left flex items-center gap-3 hover:bg-black/30 outline-none focus:ring-2 focus:ring-pink-500/50"
+                  title="Click to select or paste an image (Ctrl+V)"
+                >
                   <ImagePlus size={18} className="text-pink-400" />
-                  <span className={newItemImageFilename ? "text-pink-100" : "text-pink-900/50"}>{newItemImageFilename ? "Image selected ✓" : "Choose an image file..."}</span>
+                  <span className={newItemImageFilename ? "text-pink-100" : "text-pink-900/50"}>{newItemImageFilename ? "Image selected ✓ (Paste to replace)" : "Choose or paste an image file..."}</span>
                 </button>
               </div>
-              <div>
-                <label className="text-sm font-semibold text-amber-300/80 mb-2 block ml-1 flex justify-between"><span>Content</span><span className="text-xs font-normal text-white/30">Markdown Supported</span></label>
-                <textarea rows={6} value={newItemContent} onChange={e => setNewItemContent(e.target.value)} placeholder="Type your note here..." className="w-full bg-black/20 border border-amber-500/30 rounded-2xl p-5 text-white placeholder-amber-900/50 focus:outline-none focus:ring-2 focus:ring-amber-500/50 font-mono text-sm resize-none shadow-inner" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold text-amber-300/80 mb-2 block ml-1 flex justify-between"><span>Content</span><span className="text-xs font-normal text-white/30">Markdown Supported</span></label>
+              <div className="bg-black/20 border border-amber-500/30 rounded-2xl overflow-hidden shadow-inner focus-within:ring-2 focus-within:ring-amber-500/50 transition-all">
+                <div className="flex items-center gap-1 bg-black/40 px-3 py-2 border-b border-amber-500/20">
+                  <button type="button" onClick={() => {
+                    const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
+                    if (!txt) return;
+                    const start = txt.selectionStart; const end = txt.selectionEnd;
+                    setNewItemContent(prev => prev.substring(0, start) + "**" + prev.substring(start, end) + "**" + prev.substring(end));
+                  }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Bold"><Bold size={16} /></button>
+                  <button type="button" onClick={() => {
+                    const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
+                    if (!txt) return;
+                    const start = txt.selectionStart; const end = txt.selectionEnd;
+                    setNewItemContent(prev => prev.substring(0, start) + "*" + prev.substring(start, end) + "*" + prev.substring(end));
+                  }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Italic"><Italic size={16} /></button>
+                  <button type="button" onClick={() => {
+                    const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
+                    if (!txt) return;
+                    const start = txt.selectionStart;
+                    setNewItemContent(prev => prev.substring(0, start) + "\n### " + prev.substring(start));
+                  }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Heading"><Heading size={16} /></button>
+                  <button type="button" onClick={() => {
+                    const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
+                    if (!txt) return;
+                    const start = txt.selectionStart; const end = txt.selectionEnd;
+                    setNewItemContent(prev => prev.substring(0, start) + "`" + prev.substring(start, end) + "`" + prev.substring(end));
+                  }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Code"><Code size={16} /></button>
+                  <button type="button" onClick={() => {
+                    const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
+                    if (!txt) return;
+                    const start = txt.selectionStart; const end = txt.selectionEnd;
+                    setNewItemContent(prev => prev.substring(0, start) + "[" + prev.substring(start, end) + "](url)" + prev.substring(end));
+                  }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Link"><LinkIcon size={16} /></button>
+                </div>
+                <textarea id="new-item-content" rows={6} value={newItemContent} onChange={e => setNewItemContent(e.target.value)}
+                  onPaste={async (e) => {
+                    const items = e.clipboardData.items;
+                    for (let i = 0; i < items.length; i++) {
+                      if (items[i].type.indexOf('image') !== -1) {
+                        e.preventDefault();
+                        const file = items[i].getAsFile();
+                        if (!file) continue;
+                        const reader = new FileReader();
+                        reader.onload = async (event) => {
+                          const base64Data = event.target?.result as string;
+                          try {
+                            const filename = await invoke<string>("save_base64_image", { base64Data });
+                            const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
+                            const start = txt ? txt.selectionStart : newItemContent.length;
+                            setNewItemContent(prev => prev.substring(0, start) + `\n![pasted image](${filename})\n` + prev.substring(start));
+                          } catch (err) { alert("Failed to save pasted image: " + err); }
+                        };
+                        reader.readAsDataURL(file);
+                        break;
+                      }
+                    }
+                  }}
+                  placeholder="Type your note here... (Paste images directly!)" className="w-full bg-transparent p-5 text-white placeholder-amber-900/50 focus:outline-none font-mono text-sm resize-none" />
               </div>
             </div>
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setShowNewItemModal(false)} className="px-6 py-3.5 rounded-2xl border border-white/10 hover:bg-white/5 font-semibold text-white/70">Cancel</button>
-              <button onClick={handleCreateItem} className="px-6 py-3.5 rounded-2xl text-white font-semibold shadow-lg bg-amber-600 hover:bg-amber-500">Save Item</button>
-            </div>
+          </div>
+          <div className="flex justify-end gap-3">
+            <button onClick={() => setShowNewItemModal(false)} className="px-6 py-3.5 rounded-2xl border border-white/10 hover:bg-white/5 font-semibold text-white/70">Cancel</button>
+            <button onClick={handleCreateItem} className="px-6 py-3.5 rounded-2xl text-white font-semibold shadow-lg bg-amber-600 hover:bg-amber-500">Save Item</button>
           </div>
         </div>
       )}

@@ -167,11 +167,13 @@ pub fn delete_item(app_handle: tauri::AppHandle, id: String) -> Result<(), Strin
     let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
 
     // Delete the image file if it exists
-    let image_url: Option<String> = conn.query_row(
-        "SELECT image_url FROM items WHERE id = ?1",
-        rusqlite::params![id],
-        |row| row.get(0),
-    ).unwrap_or(None);
+    let image_url: Option<String> = conn
+        .query_row(
+            "SELECT image_url FROM items WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .unwrap_or(None);
 
     if let Some(img_path) = image_url {
         let full_path = app_dir.join("images").join(&img_path);
@@ -185,19 +187,14 @@ pub fn delete_item(app_handle: tauri::AppHandle, id: String) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub fn save_image(
-    app_handle: tauri::AppHandle,
-    source_path: String,
-) -> Result<String, String> {
+pub fn save_image(app_handle: tauri::AppHandle, source_path: String) -> Result<String, String> {
     let app_dir = app_handle.path().app_data_dir().unwrap();
     let images_dir = app_dir.join("images");
     std::fs::create_dir_all(&images_dir).map_err(|e| e.to_string())?;
 
     let source = std::path::Path::new(&source_path);
-    let ext = source.extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png");
-    
+    let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("png");
+
     let filename = format!("{}.{}", uuid::Uuid::new_v4(), ext);
     let dest = images_dir.join(&filename);
 
@@ -208,10 +205,45 @@ pub fn save_image(
 }
 
 #[tauri::command]
-pub fn get_image_base64(
+pub fn save_base64_image(
     app_handle: tauri::AppHandle,
-    filename: String,
+    base64_data: String,
 ) -> Result<String, String> {
+    use base64::{engine::general_purpose, Engine as _};
+    use std::io::Write;
+
+    // The base64_data might have a data URI prefix, e.g., "data:image/png;base64,iVBORw0KGgo..."
+    // We need to strip it if it exists.
+    let base64_content = if let Some(idx) = base64_data.find(',') {
+        &base64_data[idx + 1..]
+    } else {
+        &base64_data
+    };
+
+    let decoded = general_purpose::STANDARD
+        .decode(base64_content)
+        .map_err(|e| format!("Failed to decode base64: {}", e))?;
+
+    let app_dir = app_handle.path().app_data_dir().unwrap();
+    let images_dir = app_dir.join("images");
+
+    if !images_dir.exists() {
+        std::fs::create_dir_all(&images_dir).map_err(|e| e.to_string())?;
+    }
+
+    // Default to png for clipboard drops for simplicity, since base64 data URIs often specify,
+    // but standard clipboard image paste is usually PNG.
+    let filename = format!("{}.png", uuid::Uuid::new_v4());
+    let dest = images_dir.join(&filename);
+
+    let mut file = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+    file.write_all(&decoded).map_err(|e| e.to_string())?;
+
+    Ok(filename)
+}
+
+#[tauri::command]
+pub fn get_image_base64(app_handle: tauri::AppHandle, filename: String) -> Result<String, String> {
     use std::io::Read;
     let app_dir = app_handle.path().app_data_dir().unwrap();
     let full_path = app_dir.join("images").join(&filename);
@@ -223,11 +255,12 @@ pub fn get_image_base64(
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
 
-    let ext = full_path.extension()
+    let ext = full_path
+        .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("png")
         .to_lowercase();
-    
+
     let mime = match ext.as_str() {
         "jpg" | "jpeg" => "image/jpeg",
         "png" => "image/png",
@@ -250,12 +283,18 @@ pub fn delete_folder(app_handle: tauri::AppHandle, id: String) -> Result<(), Str
     let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
 
     // Delete all items inside this folder
-    conn.execute("DELETE FROM items WHERE folder_id = ?1", rusqlite::params![id])
-        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM items WHERE folder_id = ?1",
+        rusqlite::params![id],
+    )
+    .map_err(|e| e.to_string())?;
 
     // Delete sub-folders recursively (simple: just delete direct children for now)
-    conn.execute("DELETE FROM folders WHERE parent_id = ?1", rusqlite::params![id])
-        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM folders WHERE parent_id = ?1",
+        rusqlite::params![id],
+    )
+    .map_err(|e| e.to_string())?;
 
     // Delete the folder itself
     conn.execute("DELETE FROM folders WHERE id = ?1", rusqlite::params![id])

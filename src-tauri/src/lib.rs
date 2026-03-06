@@ -25,6 +25,7 @@ pub fn run() {
             commands::update_item,
             commands::delete_item,
             commands::save_image,
+            commands::save_base64_image,
             commands::get_image_base64,
             commands::delete_folder,
             commands::get_folders_by_parent,

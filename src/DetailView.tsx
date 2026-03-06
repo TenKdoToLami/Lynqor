@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, ask } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { Item } from "./types";
@@ -12,7 +12,12 @@ import {
     Trash2,
     Copy,
     Check,
-    ImagePlus
+    ImagePlus,
+    Bold,
+    Italic,
+    Heading,
+    Code,
+    Link as LinkIcon
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -25,6 +30,23 @@ function parseItemContent(content: string): { url: string; body: string } {
         return { url: "", body: content };
     }
 }
+
+const MarkdownImage = ({ src, alt }: { src?: string, alt?: string }) => {
+    const [imgData, setImgData] = useState<string | null>(null);
+    useEffect(() => {
+        if (!src) return;
+        if (src.startsWith('http') || src.startsWith('data:')) {
+            setImgData(src);
+            return;
+        }
+        invoke<string>("get_image_base64", { filename: src })
+            .then(data => setImgData(data))
+            .catch(e => console.error("Failed to load markdown image", e));
+    }, [src]);
+
+    if (!imgData) return <span className="text-white/30 italic text-sm">[Loading image...]</span>;
+    return <img src={imgData} alt={alt} className="max-w-full rounded-xl border border-white/10 my-4 shadow-lg object-contain bg-black/50" />;
+};
 
 export default function DetailView() {
     const [item, setItem] = useState<(Item & { folderKey?: number[] | null }) | null>(null);
@@ -119,11 +141,17 @@ export default function DetailView() {
     const handleDelete = async () => {
         if (!item) return;
         try {
-            await invoke("delete_item", { id: item.id });
-            const { Window } = await import("@tauri-apps/api/window");
-            const mainWindow = await Window.getByLabel("main");
-            if (mainWindow) await mainWindow.emit("refresh-data", {});
-            getCurrentWindow().close();
+            const confirmed = await ask("Are you sure you want to delete this note? This action cannot be undone.", {
+                title: "Delete Note",
+                kind: "warning",
+            });
+            if (confirmed) {
+                await invoke("delete_item", { id: item.id });
+                const { Window } = await import("@tauri-apps/api/window");
+                const mainWindow = await Window.getByLabel("main");
+                if (mainWindow) await mainWindow.emit("refresh-data", {});
+                getCurrentWindow().close();
+            }
         } catch (e) {
             alert("Failed to delete: " + e);
         }
@@ -199,14 +227,36 @@ export default function DetailView() {
                             <input type="url" value={editUrl} onChange={e => setEditUrl(e.target.value)} placeholder="https://" className="w-full bg-black/20 border border-emerald-500/30 rounded-2xl px-5 py-3 text-emerald-100 placeholder-emerald-900/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all shadow-inner" />
                         </div>
                         <div>
-                            <label className="text-sm font-semibold text-pink-300/80 mb-2 block ml-1">Preview Image</label>
+                            <label className="text-sm font-semibold text-pink-300/80 mb-2 block ml-1">Preview Image (Click & Paste supported)</label>
                             <button
+                                type="button"
                                 onClick={async () => { const f = await pickImage(); if (f) setEditImageFilename(f); }}
-                                className="w-full bg-black/20 border border-pink-500/30 rounded-2xl px-5 py-3 text-left flex items-center gap-3 hover:bg-black/30 transition-all"
+                                onPaste={async (e) => {
+                                    const items = e.clipboardData.items;
+                                    for (let i = 0; i < items.length; i++) {
+                                        if (items[i].type.indexOf('image') !== -1) {
+                                            e.preventDefault();
+                                            const file = items[i].getAsFile();
+                                            if (!file) continue;
+                                            const reader = new FileReader();
+                                            reader.onload = async (event) => {
+                                                const base64Data = event.target?.result as string;
+                                                try {
+                                                    const filename = await invoke<string>("save_base64_image", { base64Data });
+                                                    setEditImageFilename(filename);
+                                                } catch (err) { alert("Failed to save pasted image: " + err); }
+                                            };
+                                            reader.readAsDataURL(file);
+                                            break;
+                                        }
+                                    }
+                                }}
+                                className="w-full bg-black/20 border border-pink-500/30 rounded-2xl px-5 py-3 text-left flex items-center gap-3 hover:bg-black/30 transition-all outline-none focus:ring-2 focus:ring-pink-500/50"
+                                title="Click to select or paste an image (Ctrl+V)"
                             >
                                 <ImagePlus size={18} className="text-pink-400" />
                                 <span className={editImageFilename ? "text-pink-100" : "text-pink-900/50"}>
-                                    {editImageFilename ? `Image: ${editImageFilename}` : "Choose an image file..."}
+                                    {editImageFilename ? `Image: ${editImageFilename} (Paste to replace)` : "Choose or paste an image file..."}
                                 </span>
                             </button>
                         </div>
@@ -215,7 +265,64 @@ export default function DetailView() {
                                 <span>Content</span>
                                 <span className="text-xs font-normal text-white/30">Markdown Supported</span>
                             </label>
-                            <textarea rows={16} value={editContent} onChange={e => setEditContent(e.target.value)} placeholder="Type your note here..." className="w-full bg-black/20 border border-amber-500/30 rounded-2xl p-5 text-white placeholder-amber-900/50 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all font-mono text-sm leading-relaxed resize-none shadow-inner" />
+                            <div className="bg-black/20 border border-amber-500/30 rounded-2xl overflow-hidden shadow-inner focus-within:ring-2 focus-within:ring-amber-500/50 transition-all">
+                                <div className="flex items-center gap-1 bg-black/40 px-3 py-2 border-b border-amber-500/20">
+                                    <button type="button" onClick={() => {
+                                        const txt = document.getElementById('edit-item-content') as HTMLTextAreaElement;
+                                        if (!txt) return;
+                                        const start = txt.selectionStart; const end = txt.selectionEnd;
+                                        setEditContent(prev => prev.substring(0, start) + "**" + prev.substring(start, end) + "**" + prev.substring(end));
+                                    }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Bold"><Bold size={16} /></button>
+                                    <button type="button" onClick={() => {
+                                        const txt = document.getElementById('edit-item-content') as HTMLTextAreaElement;
+                                        if (!txt) return;
+                                        const start = txt.selectionStart; const end = txt.selectionEnd;
+                                        setEditContent(prev => prev.substring(0, start) + "*" + prev.substring(start, end) + "*" + prev.substring(end));
+                                    }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Italic"><Italic size={16} /></button>
+                                    <button type="button" onClick={() => {
+                                        const txt = document.getElementById('edit-item-content') as HTMLTextAreaElement;
+                                        if (!txt) return;
+                                        const start = txt.selectionStart;
+                                        setEditContent(prev => prev.substring(0, start) + "\n### " + prev.substring(start));
+                                    }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Heading"><Heading size={16} /></button>
+                                    <button type="button" onClick={() => {
+                                        const txt = document.getElementById('edit-item-content') as HTMLTextAreaElement;
+                                        if (!txt) return;
+                                        const start = txt.selectionStart; const end = txt.selectionEnd;
+                                        setEditContent(prev => prev.substring(0, start) + "`" + prev.substring(start, end) + "`" + prev.substring(end));
+                                    }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Code"><Code size={16} /></button>
+                                    <button type="button" onClick={() => {
+                                        const txt = document.getElementById('edit-item-content') as HTMLTextAreaElement;
+                                        if (!txt) return;
+                                        const start = txt.selectionStart; const end = txt.selectionEnd;
+                                        setEditContent(prev => prev.substring(0, start) + "[" + prev.substring(start, end) + "](url)" + prev.substring(end));
+                                    }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Link"><LinkIcon size={16} /></button>
+                                </div>
+                                <textarea id="edit-item-content" rows={16} value={editContent} onChange={e => setEditContent(e.target.value)}
+                                    onPaste={async (e) => {
+                                        const items = e.clipboardData.items;
+                                        for (let i = 0; i < items.length; i++) {
+                                            if (items[i].type.indexOf('image') !== -1) {
+                                                e.preventDefault();
+                                                const file = items[i].getAsFile();
+                                                if (!file) continue;
+                                                const reader = new FileReader();
+                                                reader.onload = async (event) => {
+                                                    const base64Data = event.target?.result as string;
+                                                    try {
+                                                        const filename = await invoke<string>("save_base64_image", { base64Data });
+                                                        const txt = document.getElementById('edit-item-content') as HTMLTextAreaElement;
+                                                        const start = txt ? txt.selectionStart : editContent.length;
+                                                        setEditContent(prev => prev.substring(0, start) + `\n![pasted image](${filename})\n` + prev.substring(start));
+                                                    } catch (err) { alert("Failed to save pasted image: " + err); }
+                                                };
+                                                reader.readAsDataURL(file);
+                                                break;
+                                            }
+                                        }
+                                    }}
+                                    placeholder="Type your note here... (Paste images directly!)" className="w-full bg-transparent p-5 text-white placeholder-amber-900/50 focus:outline-none font-mono text-sm leading-relaxed resize-none" />
+                            </div>
                         </div>
                     </div>
                 ) : (
@@ -239,8 +346,13 @@ export default function DetailView() {
                         )}
 
                         {body && (
-                            <div className="prose prose-invert prose-indigo prose-base mx-auto">
-                                <Markdown remarkPlugins={[remarkGfm]}>{body}</Markdown>
+                            <div className="prose prose-invert prose-indigo prose-base mx-auto w-full">
+                                <Markdown
+                                    remarkPlugins={[remarkGfm]}
+                                    components={{ img: MarkdownImage }}
+                                >
+                                    {body}
+                                </Markdown>
                             </div>
                         )}
                     </div>
