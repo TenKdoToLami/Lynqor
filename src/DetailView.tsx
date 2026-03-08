@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { open, ask } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { Item } from "./types";
@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ConfirmDeleteModal } from "./components/Modals/ConfirmDeleteModal";
 
 function parseItemContent(content: string): { url: string; body: string } {
     try {
@@ -57,6 +58,7 @@ export default function DetailView() {
     const [editImageFilename, setEditImageFilename] = useState("");
     const [copiedUrl, setCopiedUrl] = useState(false);
     const [imageSrc, setImageSrc] = useState<string | null>(null);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
     // Listen for item data from main window
     useEffect(() => {
@@ -111,6 +113,14 @@ export default function DetailView() {
         setIsEditing(true);
     };
 
+    const emitToast = async (message: string, type: 'success' | 'error') => {
+        try {
+            const { Window } = await import("@tauri-apps/api/window");
+            const mainWindow = await Window.getByLabel("main");
+            if (mainWindow) await mainWindow.emit("show-toast", { message, type });
+        } catch { /* ignore */ }
+    };
+
     const handleUpdate = async () => {
         if (!item) return;
         try {
@@ -122,7 +132,6 @@ export default function DetailView() {
                 folderKey: item.folderKey,
                 rootFolderId: item.rootFolderId || null
             });
-            // Update local state
             setItem({
                 ...item,
                 title: editTitle,
@@ -130,31 +139,34 @@ export default function DetailView() {
                 imageUrl: editImageFilename || undefined
             });
             setIsEditing(false);
-            // Notify main window to refresh
             const { Window } = await import("@tauri-apps/api/window");
             const mainWindow = await Window.getByLabel("main");
             if (mainWindow) await mainWindow.emit("refresh-data", {});
+            await emitToast("Note updated", "success");
         } catch (e) {
-            alert("Failed to update: " + e);
+            await emitToast("Failed to update: " + e, "error");
         }
     };
 
-    const handleDelete = async () => {
+    const handleDelete = () => {
+        if (!item) return;
+        setShowDeleteConfirm(true);
+    };
+
+    const executeDelete = async () => {
         if (!item) return;
         try {
-            const confirmed = await ask("Are you sure you want to delete this note? This action cannot be undone.", {
-                title: "Delete Note",
-                kind: "warning",
-            });
-            if (confirmed) {
-                await invoke("delete_item", { id: item.id, rootFolderId: item.rootFolderId || null, folderKey: item.folderKey });
-                const { Window } = await import("@tauri-apps/api/window");
-                const mainWindow = await Window.getByLabel("main");
-                if (mainWindow) await mainWindow.emit("refresh-data", {});
-                getCurrentWindow().close();
+            await invoke("delete_item", { id: item.id, rootFolderId: item.rootFolderId || null, folderKey: item.folderKey });
+            const { Window } = await import("@tauri-apps/api/window");
+            const mainWindow = await Window.getByLabel("main");
+            if (mainWindow) {
+                await mainWindow.emit("refresh-data", {});
+                await mainWindow.emit("show-toast", { message: "Note deleted", type: "success" });
             }
+            getCurrentWindow().close();
         } catch (e) {
-            alert("Failed to delete: " + e);
+            await emitToast("Failed to delete: " + e, "error");
+            setShowDeleteConfirm(false);
         }
     };
 
@@ -359,6 +371,13 @@ export default function DetailView() {
                     </div>
                 )}
             </main>
+            <ConfirmDeleteModal
+                isOpen={showDeleteConfirm}
+                onClose={() => setShowDeleteConfirm(false)}
+                onConfirm={executeDelete}
+                type="note"
+                name={item.title}
+            />
         </div>
     );
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { open, ask } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -16,6 +16,7 @@ import { PasswordPrompt } from "./components/Modals/PasswordPrompt";
 import { NewFolderModal } from "./components/Modals/NewFolderModal";
 import { EditFolderModal } from "./components/Modals/EditFolderModal";
 import { NewItemModal } from "./components/Modals/NewItemModal";
+import { ConfirmDeleteModal } from "./components/Modals/ConfirmDeleteModal";
 
 type SortOption = 'manual' | 'a-z' | 'z-a' | 'latest_edit' | 'latest_create';
 
@@ -47,6 +48,7 @@ export default function App() {
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
   const [showEditFolderModal, setShowEditFolderModal] = useState(false);
   const [showNewItemModal, setShowNewItemModal] = useState(false);
+  const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; type: 'note' | 'folder'; id: string; name: string }>({ isOpen: false, type: 'folder', id: '', name: '' });
   const [passwordPrompt, setPasswordPrompt] = useState<{ isOpen: boolean; targetFolderId: string | null }>({ isOpen: false, targetFolderId: null });
   const [passwordInput, setPasswordInput] = useState("");
   const [newItemType, setNewItemType] = useState<ItemType | null>(null);
@@ -105,41 +107,80 @@ export default function App() {
 
   const loadData = useCallback(async () => {
     try {
-      const foldersData = await invoke<Folder[]>("get_folders_by_parent", { parentId: currentFolderId, folderKey: currentFolderKey, rootFolderId: rootLockedFolderId });
+      const [foldersData, itemsData] = await Promise.all([
+        invoke<Folder[]>("get_folders_by_parent", { parentId: currentFolderId, folderKey: currentFolderKey, rootFolderId: rootLockedFolderId }),
+        invoke<Item[]>("get_items_by_folder", { folderId: currentFolderId, folderKey: currentFolderKey, rootFolderId: rootLockedFolderId }),
+      ]);
       setFolders(foldersData);
-      const itemsData = await invoke<Item[]>("get_items_by_folder", { folderId: currentFolderId, folderKey: currentFolderKey, rootFolderId: rootLockedFolderId });
       setItems(itemsData);
 
-      const paths: Record<string, string> = {};
+      // Collect unique image URLs and fetch in parallel
+      const urls = new Set<string>();
+      for (const f of foldersData) if (f.imageUrl) urls.add(f.imageUrl);
+      for (const i of itemsData) if (i.imageUrl) urls.add(i.imageUrl);
 
-      const fetchImage = async (url: string) => {
-        if (!paths[url]) {
-          try {
-            paths[url] = await invoke<string>("get_image_base64", { filename: url });
-          } catch { /* skip */ }
-        }
-      };
-
-      for (const folder of foldersData) {
-        if (folder.imageUrl) await fetchImage(folder.imageUrl);
+      if (urls.size > 0) {
+        const entries = await Promise.all(
+          [...urls].map(async (url) => {
+            try { return [url, await invoke<string>("get_image_base64", { filename: url })] as const; }
+            catch { return null; }
+          })
+        );
+        const paths: Record<string, string> = {};
+        for (const e of entries) if (e) paths[e[0]] = e[1];
+        setImagePaths(paths);
+      } else {
+        setImagePaths({});
       }
-      for (const item of itemsData) {
-        if (item.imageUrl) await fetchImage(item.imageUrl);
-      }
-
-      setImagePaths(paths);
-      console.log("Loaded folders:", foldersData);
-      console.log("Loaded items:", itemsData);
     } catch (e) { console.error("Data load failed:", e); }
   }, [currentFolderId, currentFolderKey, rootLockedFolderId]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Persist window size & position
+  useEffect(() => {
+    const mainWindow = getCurrentWindow();
+    let saveTimer: ReturnType<typeof setTimeout>;
+    const save = async () => {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        try {
+          const pos = await mainWindow.outerPosition();
+          const size = await mainWindow.outerSize();
+          localStorage.setItem('lynqor_window', JSON.stringify({ x: pos.x, y: pos.y, w: size.width, h: size.height }));
+        } catch { /* ignore */ }
+      }, 500);
+    };
+    // Restore on mount
+    (async () => {
+      try {
+        const saved = localStorage.getItem('lynqor_window');
+        if (saved) {
+          const { x, y, w, h } = JSON.parse(saved);
+          await mainWindow.setPosition(new PhysicalPosition(x, y));
+          await mainWindow.setSize(new PhysicalSize(w, h));
+        }
+      } catch { /* ignore */ }
+    })();
+    const unlisteners: (() => void)[] = [];
+    mainWindow.onMoved(() => save()).then(u => unlisteners.push(u));
+    mainWindow.onResized(() => save()).then(u => unlisteners.push(u));
+    return () => { clearTimeout(saveTimer); unlisteners.forEach(u => u()); };
+  }, []);
 
   // Refresh when detail window edits/deletes
   useEffect(() => {
     const unlisten = listen("refresh-data", () => { loadData(); });
     return () => { unlisten.then(fn => fn()); };
   }, [loadData]);
+
+  // Listen for toast events from detail window
+  useEffect(() => {
+    const unlisten = listen<{ message: string; type: 'success' | 'error' }>("show-toast", (event) => {
+      setToast(event.payload);
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
 
   // Keep detail window pinned to the right of main when moving/resizing
   useEffect(() => {
@@ -224,20 +265,23 @@ export default function App() {
     finally { setLoadingMessage(null); setIsBusy(false); }
   };
 
-  const handleDeleteFolder = async (folderId: string) => {
+  const handleDeleteFolder = (folderId: string) => {
     if (isBusy) return;
+    const folder = folders.find(f => f.id === folderId);
+    setDeleteModal({ isOpen: true, type: 'folder', id: folderId, name: folder?.name || '' });
+  };
+
+  const executeDelete = async () => {
+    if (isBusy) return;
+    setIsBusy(true);
     try {
-      const confirmed = await ask("Are you sure you want to delete this folder? This will delete all its contents and cannot be undone.", {
-        title: "Delete Folder",
-        kind: "warning",
-      });
-      if (confirmed) {
-        setIsBusy(true);
-        await invoke("delete_folder", { id: folderId, rootFolderId: rootLockedFolderId, parentFolderKey: currentFolderKey });
-        loadData();
+      if (deleteModal.type === 'folder') {
+        await invoke("delete_folder", { id: deleteModal.id, rootFolderId: rootLockedFolderId, parentFolderKey: currentFolderKey });
         setToast({ message: "Folder deleted", type: 'success' });
       }
-    } catch (e) { setToast({ message: "Failed to delete folder: " + e, type: 'error' }); }
+      setDeleteModal({ isOpen: false, type: 'folder', id: '', name: '' });
+      loadData();
+    } catch (e) { setToast({ message: "Failed to delete: " + e, type: 'error' }); }
     finally { setIsBusy(false); }
   };
 
@@ -296,24 +340,30 @@ export default function App() {
   const openLink = async (url: string) => { try { await openUrl(url); } catch { window.open(url, '_blank'); } };
   const getImageSrc = (imageUrl: string | undefined) => imageUrl ? (imagePaths[imageUrl] || null) : null;
 
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) {
+  const handleSearch = useCallback(async (q: string) => {
+    if (!q.trim()) {
       setSearchResults(null);
       return;
     }
     try {
       const results = await invoke<SearchResultItem[]>("search_items", {
-        query: searchQuery,
+        query: q,
         currentFolderId: currentFolderId,
         currentFolderKey: currentFolderKey || Array(32).fill(0),
         rootFolderId: rootLockedFolderId
       });
       setSearchResults(results);
     } catch (e) {
-      alert("Search failed: " + e);
+      setToast({ message: "Search failed: " + e, type: 'error' });
       setSearchResults(null);
     }
-  };
+  }, [currentFolderId, currentFolderKey, rootLockedFolderId]);
+
+  // Debounced search-as-you-type
+  useEffect(() => {
+    const timer = setTimeout(() => handleSearch(searchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery, handleSearch]);
 
   const getSortedFolders = useCallback(() => {
     let sorted = [...folders];
@@ -478,7 +528,7 @@ export default function App() {
             <Toolbar
               searchQuery={searchQuery}
               setSearchQuery={setSearchQuery}
-              handleSearch={handleSearch}
+              onClearSearch={() => { setSearchQuery(""); setSearchResults(null); }}
               sortBy={sortBy}
               setSortBy={setSortBy}
               viewMode={viewMode}
@@ -702,6 +752,15 @@ export default function App() {
           }
         }}
         onCreate={handleCreateItem}
+      />
+
+      <ConfirmDeleteModal
+        isOpen={deleteModal.isOpen}
+        onClose={() => setDeleteModal({ isOpen: false, type: 'folder', id: '', name: '' })}
+        onConfirm={executeDelete}
+        type={deleteModal.type}
+        name={deleteModal.name}
+        isBusy={isBusy}
       />
     </div>
   );
