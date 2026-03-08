@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -17,7 +18,8 @@ import {
     Italic,
     Heading,
     Code,
-    Link as LinkIcon
+    Link as LinkIcon,
+    QrCode,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -59,6 +61,7 @@ export default function DetailView() {
     const [copiedUrl, setCopiedUrl] = useState(false);
     const [imageSrc, setImageSrc] = useState<string | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [showQrExpanded, setShowQrExpanded] = useState(false);
 
     // Listen for item data from main window
     useEffect(() => {
@@ -347,14 +350,47 @@ export default function DetailView() {
                         )}
 
                         {url && (
-                            <div className="bg-white/5 p-4 rounded-2xl border border-white/10 shadow-inner flex items-center gap-3 hover:bg-white/10 transition-colors">
-                                <span className="text-emerald-300 break-all text-sm font-medium truncate flex-1">{url}</span>
-                                <button onClick={() => copyToClipboard(url)} className="bg-white/10 hover:bg-white/20 p-2.5 rounded-xl text-white/60 hover:text-white transition-all shrink-0" title="Copy">
-                                    {copiedUrl ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
-                                </button>
-                                <button onClick={() => openLink(url)} className="bg-emerald-500/20 p-2.5 rounded-xl text-emerald-300 hover:bg-emerald-500 hover:text-white transition-all shrink-0" title="Open in browser">
-                                    <ExternalLink size={16} />
-                                </button>
+                            <div className="bg-white/5 p-3 rounded-2xl border border-white/10 shadow-inner flex items-start gap-3">
+                                {/* QR code anchored left inside the box */}
+                                <div
+                                    onClick={() => setShowQrExpanded(true)}
+                                    className="shrink-0 cursor-pointer group"
+                                >
+                                    <div className="bg-white p-1.5 rounded-lg group-hover:shadow-indigo-500/20 group-hover:scale-105 transition-all">
+                                        <QRCodeSVG value={url} size={64} level="M" />
+                                    </div>
+                                </div>
+                                {/* URL text wrapping beside the QR */}
+                                <span className="text-emerald-300 break-all text-sm font-medium flex-1 pt-1 leading-relaxed">{url}</span>
+                                {/* Action buttons */}
+                                <div className="flex gap-1.5 shrink-0 pt-0.5">
+                                    <button onClick={() => copyToClipboard(url)} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg text-white/60 hover:text-white transition-all" title="Copy">
+                                        {copiedUrl ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                                    </button>
+                                    <button onClick={() => openLink(url)} className="bg-emerald-500/20 p-2 rounded-lg text-emerald-300 hover:bg-emerald-500 hover:text-white transition-all" title="Open in browser">
+                                        <ExternalLink size={14} />
+                                    </button>
+                                    <button onClick={() => setShowQrExpanded(true)} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg text-white/60 hover:text-white transition-all" title="Expand QR Code">
+                                        <QrCode size={14} />
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Expanded QR Code modal */}
+                        {showQrExpanded && url && (
+                            <div
+                                className="fixed inset-0 z-[100] flex items-center justify-center cursor-pointer"
+                                onClick={() => setShowQrExpanded(false)}
+                            >
+                                <div className="absolute inset-0 bg-black/80 backdrop-blur-md" />
+                                <div className="relative flex flex-col items-center gap-6" onClick={e => e.stopPropagation()}>
+                                    <div className="bg-white p-6 rounded-3xl shadow-2xl">
+                                        <QRCodeSVG value={url} size={280} level="H" />
+                                    </div>
+                                    <p className="text-white/70 text-sm max-w-xs text-center break-all">{url}</p>
+                                    <p className="text-white/30 text-xs">Click anywhere to close</p>
+                                </div>
                             </div>
                         )}
 
