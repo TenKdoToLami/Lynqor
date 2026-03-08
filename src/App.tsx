@@ -6,34 +6,28 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { Folder, Item, ItemType } from "./types";
-import {
-  Folder as FolderIcon,
-  Lock,
-  ChevronRight,
-  LayoutGrid,
-  List as ListIcon,
-  FileText,
-  Plus,
-  ArrowLeft,
-  Trash2,
-  ExternalLink,
-  ImagePlus,
-  Bold,
-  Italic,
-  Heading,
-  Code,
-  Link as LinkIcon
-} from "lucide-react";
+import { ArrowLeft, Search } from "lucide-react";
 import { cn } from "./utils";
+import { Breadcrumbs } from "./components/Breadcrumbs";
+import { Toolbar } from "./components/Toolbar";
+import { FolderItem } from "./components/FolderItem";
+import { NoteItem } from "./components/NoteItem";
+import { PasswordPrompt } from "./components/Modals/PasswordPrompt";
+import { NewFolderModal } from "./components/Modals/NewFolderModal";
+import { EditFolderModal } from "./components/Modals/EditFolderModal";
+import { NewItemModal } from "./components/Modals/NewItemModal";
 
-function parseItemContent(content: string): { url: string; body: string } {
-  try {
-    const parsed = JSON.parse(content);
-    return { url: parsed.url || "", body: parsed.body || "" };
-  } catch {
-    return { url: "", body: content };
-  }
-}
+type SortOption = 'manual' | 'a-z' | 'z-a' | 'latest_edit' | 'latest_create';
+
+type SearchResultItem = {
+  id: string;
+  isFolder: boolean;
+  name: string;
+  content?: string;
+  parentId?: string;
+  itemType?: string;
+  imageUrl?: string;
+};
 
 const DETAIL_WIDTH = 650;
 
@@ -44,9 +38,14 @@ export default function App() {
   const [currentFolderKey, setCurrentFolderKey] = useState<number[] | null>(null);
   const [folderPath, setFolderPath] = useState<Folder[]>([]);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [sortBy, setSortBy] = useState<SortOption>('manual');
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResultItem[] | null>(null);
 
   const [isNewMenuOpen, setIsNewMenuOpen] = useState(false);
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
+  const [showEditFolderModal, setShowEditFolderModal] = useState(false);
   const [showNewItemModal, setShowNewItemModal] = useState(false);
   const [passwordPrompt, setPasswordPrompt] = useState<{ isOpen: boolean; targetFolderId: string | null }>({ isOpen: false, targetFolderId: null });
   const [passwordInput, setPasswordInput] = useState("");
@@ -77,7 +76,9 @@ export default function App() {
         }
       }
       setImagePaths(paths);
-    } catch (e) { console.error(e); }
+      console.log("Loaded folders:", foldersData);
+      console.log("Loaded items:", itemsData);
+    } catch (e) { console.error("Data load failed:", e); }
   }, [currentFolderId, currentFolderKey]);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -112,10 +113,6 @@ export default function App() {
 
   const navigateToRoot = () => { setCurrentFolderId(null); setCurrentFolderKey(null); setFolderPath([]); };
   const navigateToBreadcrumb = (crumb: Folder, idx: number) => { setCurrentFolderId(crumb.id); setFolderPath(folderPath.slice(0, idx + 1)); setCurrentFolderKey(null); };
-  const navigateUp = () => {
-    if (folderPath.length > 1) { const np = folderPath.slice(0, -1); setFolderPath(np); setCurrentFolderId(np[np.length - 1].id); setCurrentFolderKey(null); }
-    else navigateToRoot();
-  };
 
   const handleFolderClick = (folder: Folder) => {
     if (folder.isLocked) setPasswordPrompt({ isOpen: true, targetFolderId: folder.id });
@@ -204,6 +201,105 @@ export default function App() {
   const openLink = async (url: string) => { try { await openUrl(url); } catch { window.open(url, '_blank'); } };
   const getImageSrc = (imageUrl: string | undefined) => imageUrl ? (imagePaths[imageUrl] || null) : null;
 
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) {
+      setSearchResults(null);
+      return;
+    }
+    try {
+      const results = await invoke<SearchResultItem[]>("search_items", {
+        query: searchQuery,
+        folderKey: currentFolderKey || Array(32).fill(0)
+      });
+      setSearchResults(results);
+    } catch (e) {
+      alert("Search failed: " + e);
+      setSearchResults(null);
+    }
+  };
+
+  const getSortedFolders = useCallback(() => {
+    let sorted = [...folders];
+    if (sortBy === 'a-z') sorted.sort((a, b) => a.name.localeCompare(b.name));
+    if (sortBy === 'z-a') sorted.sort((a, b) => b.name.localeCompare(a.name));
+    if (sortBy === 'latest_edit') sorted.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
+    if (sortBy === 'latest_create') sorted.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    if (sortBy === 'manual') sorted.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+    return sorted;
+  }, [folders, sortBy]);
+
+  const getSortedItems = useCallback(() => {
+    let sorted = [...items];
+    if (sortBy === 'a-z') sorted.sort((a, b) => a.title.localeCompare(b.title));
+    if (sortBy === 'z-a') sorted.sort((a, b) => b.title.localeCompare(a.title));
+    if (sortBy === 'latest_edit') sorted.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
+    if (sortBy === 'latest_create') sorted.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    if (sortBy === 'manual') sorted.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+    return sorted;
+  }, [items, sortBy]);
+
+  const handleEditFolder = async () => {
+    try {
+      if (!currentFolderId) return;
+      const currentKey = currentFolderKey || Array(32).fill(0);
+      const parentKey = folderPath.length > 1 ? (folderPath[folderPath.length - 2] as any).folderKey : null;
+
+      await invoke("update_folder_with_key", {
+        id: currentFolderId,
+        name: newFolderName,
+        password: newFolderEncrypt ? newFolderPassword : null,
+        currentFolderKey: currentKey,
+        parentFolderKey: parentKey
+      });
+
+      setShowEditFolderModal(false);
+      setNewFolderPassword("");
+      loadData();
+
+      // Update folder path name if it changed
+      setFolderPath(prev => {
+        const newPath = [...prev];
+        newPath[newPath.length - 1].name = newFolderName;
+        return newPath;
+      });
+    } catch (e) { alert("Failed to edit folder: " + e); }
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetId: string, targetType: 'folder' | 'item') => {
+    e.preventDefault();
+    if (sortBy !== 'manual') return;
+
+    const draggedData = JSON.parse(e.dataTransfer.getData('text/plain') || '{}');
+    const { id: draggedId, type: draggedType } = draggedData;
+
+    if (!draggedId || draggedId === targetId || draggedType !== targetType) return;
+
+    let list = draggedType === 'folder' ? getSortedFolders() : getSortedItems();
+    const targetIdx = list.findIndex(x => x.id === targetId);
+    if (targetIdx === -1) return;
+
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const isBefore = viewMode === 'list' ? (e.clientY < rect.top + rect.height / 2) : (e.clientX < rect.left + rect.width / 2);
+
+    let prevIndex = 0;
+    let nextIndex = 0;
+
+    if (isBefore) {
+      prevIndex = targetIdx > 0 ? (list[targetIdx - 1].orderIndex || 0) : (list[targetIdx].orderIndex || 0) - 1;
+      nextIndex = list[targetIdx].orderIndex || 0;
+    } else {
+      prevIndex = list[targetIdx].orderIndex || 0;
+      nextIndex = targetIdx < list.length - 1 ? (list[targetIdx + 1].orderIndex || 0) : (list[targetIdx].orderIndex || 0) + 1;
+    }
+
+    const newOrderIndex = (prevIndex + nextIndex) / 2.0;
+
+    try {
+      await invoke('update_order_index', { id: draggedId, itemType: draggedType, orderIndex: newOrderIndex });
+      loadData();
+    } catch (err) { alert("Failed to reorder: " + err); }
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-neutral-100 flex flex-col font-sans selection:bg-indigo-500/30 relative overflow-hidden">
       <div className="fixed inset-0 pointer-events-none z-0">
@@ -212,274 +308,204 @@ export default function App() {
         <div className="absolute -bottom-40 left-1/4 w-[400px] h-[400px] bg-sky-600/20 rounded-full blur-[100px] mix-blend-screen opacity-40" />
       </div>
 
-      <header className="h-16 border-b border-white/5 bg-white/5 backdrop-blur-xl flex items-center justify-between px-6 sticky top-0 z-10 w-full relative shadow-sm">
-        <div data-tauri-drag-region className="absolute inset-0 w-full h-full cursor-default" />
-        <div className="flex items-center gap-3 relative z-10">
-          {currentFolderId && (
-            <button onClick={navigateUp} className="p-2 bg-white/5 hover:bg-white/10 border border-white/5 rounded-lg transition-all flex items-center text-neutral-300 hover:text-white"><ArrowLeft size={16} /></button>
-          )}
-          <button onClick={navigateToRoot} className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-300 to-purple-300 hover:opacity-80 transition-opacity drop-shadow-sm">Lynqor</button>
-          {folderPath.map((crumb, idx, arr) => (
-            <div key={crumb.id} className="flex items-center gap-2 text-white/50">
-              <ChevronRight size={14} className="text-white/30" />
-              <button onClick={() => navigateToBreadcrumb(crumb, idx)} className={cn("hover:text-indigo-300 transition-colors font-medium", idx === arr.length - 1 ? "text-white" : "")}>{crumb.name}</button>
+      <header className="p-6 pb-2 border-b border-white/5 relative z-20">
+        <div className="max-w-7xl mx-auto">
+          <div className="flex items-center justify-between gap-6 mb-6">
+            <div className="w-1/3">
+              <Breadcrumbs
+                currentFolderId={currentFolderId}
+                folderPath={folderPath}
+                navigateToRoot={navigateToRoot}
+                navigateToBreadcrumb={navigateToBreadcrumb}
+                onEditFolder={() => {
+                  const target = folderPath[folderPath.length - 1];
+                  setNewFolderName(target.name);
+                  setNewFolderEncrypt(target.isLocked);
+                  setShowEditFolderModal(true);
+                }}
+              />
             </div>
-          ))}
-        </div>
-        <div className="flex items-center gap-4 relative z-10">
-          <div className="flex items-center bg-white/5 rounded-lg p-1 border border-white/5 shadow-inner">
-            <button onClick={() => setViewMode('grid')} className={cn("p-1.5 rounded-md transition-all", viewMode === 'grid' ? "bg-white/10 text-white shadow-lg ring-1 ring-white/10" : "text-white/40 hover:text-white hover:bg-white/5")}><LayoutGrid size={16} /></button>
-            <button onClick={() => setViewMode('list')} className={cn("p-1.5 rounded-md transition-all", viewMode === 'list' ? "bg-white/10 text-white shadow-lg ring-1 ring-white/10" : "text-white/40 hover:text-white hover:bg-white/5")}><ListIcon size={16} /></button>
-          </div>
-          <div className="relative">
-            <button onClick={() => setIsNewMenuOpen(!isNewMenuOpen)} className="flex items-center gap-2 bg-gradient-to-tr from-indigo-600 to-purple-600 hover:opacity-90 text-white px-5 py-2 rounded-xl font-medium transition-all shadow-lg shadow-indigo-500/25 ring-1 ring-white/20">
-              <Plus size={18} /><span className="hidden sm:inline tracking-wide text-sm font-semibold">New</span>
-            </button>
-            {isNewMenuOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setIsNewMenuOpen(false)} />
-                <div className="absolute right-0 mt-3 w-56 bg-slate-900/80 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden z-50 py-1 ring-1 ring-black/50">
-                  <button onClick={() => { setShowNewFolderModal(true); setIsNewMenuOpen(false); }} className="w-full text-left px-4 py-3 hover:bg-white/10 flex items-center gap-3 text-neutral-200 font-medium text-sm"><FolderIcon size={16} className="text-indigo-400" /> Folder</button>
-                  <div className="h-px bg-white/5 my-1 mx-3" />
-                  <button onClick={() => { setNewItemType('NOTE'); setShowNewItemModal(true); setIsNewMenuOpen(false); }} className="w-full text-left px-4 py-3 hover:bg-white/10 flex items-center gap-3 text-neutral-200 font-medium text-sm"><FileText size={16} className="text-amber-400" /> Note / Link</button>
-                </div>
-              </>
-            )}
+
+            <Toolbar
+              searchQuery={searchQuery}
+              setSearchQuery={setSearchQuery}
+              handleSearch={handleSearch}
+              sortBy={sortBy}
+              setSortBy={setSortBy}
+              viewMode={viewMode}
+              setViewMode={setViewMode}
+              isNewMenuOpen={isNewMenuOpen}
+              setIsNewMenuOpen={setIsNewMenuOpen}
+              onNewFolder={() => setShowNewFolderModal(true)}
+              onNewNote={(type) => { setNewItemType(type); setShowNewItemModal(true); }}
+            />
           </div>
         </div>
       </header>
 
       <main className="flex-1 p-8 overflow-y-auto relative z-0">
-        {folders.length === 0 && items.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-white/30 mt-10">
-            <div className="w-24 h-24 rounded-full bg-white/5 border border-white/10 flex items-center justify-center mb-6 shadow-inner"><FolderIcon size={40} className="opacity-50" /></div>
-            <h2 className="text-2xl font-bold text-white/80">This space is empty</h2>
-            <p className="mt-2 text-sm text-white/40">Add notes, links, or folders using the New button.</p>
+        {searchResults ? (
+          <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                  <Search size={22} className="text-indigo-400" />
+                  Search Results
+                </h2>
+                <p className="text-white/40 text-sm mt-1">Found {searchResults.length} matching items</p>
+              </div>
+              <button
+                onClick={() => setSearchResults(null)}
+                className="flex items-center gap-2 text-white/40 hover:text-white transition-colors bg-white/5 px-4 py-2 rounded-xl"
+              >
+                <ArrowLeft size={16} /> Clear Search
+              </button>
+            </div>
+
+            <div className={cn("grid gap-6", viewMode === 'grid' ? "grid-cols-[repeat(auto-fill,minmax(200px,1fr))]" : "grid-cols-1")}>
+              {searchResults.map((res) => (
+                res.isFolder ? (
+                  <FolderItem
+                    key={res.id}
+                    folder={{ id: res.id, name: res.name, isLocked: false, parentId: res.parentId || null, orderIndex: 0, createdAt: "", updatedAt: "" }}
+                    viewMode={viewMode}
+                    onClick={() => handleFolderClick(res as any)}
+                    onDelete={() => { }}
+                    draggable={false}
+                    onDragStart={() => { }}
+                    onDragOver={() => { }}
+                    onDrop={() => { }}
+                  />
+                ) : (
+                  <NoteItem
+                    key={res.id}
+                    item={{ id: res.id, title: res.name, content: res.content || "", imageUrl: res.imageUrl, folderId: res.parentId || null, itemType: (res.itemType as ItemType) || 'NOTE', orderIndex: 0, createdAt: "", updatedAt: "" }}
+                    viewMode={viewMode}
+                    imgSrc={getImageSrc(res.imageUrl)}
+                    onClick={() => openItemDetail(res as any)}
+                    onOpenLink={openLink}
+                    draggable={false}
+                    onDragStart={() => { }}
+                    onDragOver={() => { }}
+                    onDrop={() => { }}
+                  />
+                )
+              ))}
+            </div>
+            {searchResults.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-20 text-white/20">
+                <Search size={64} className="mb-4 stroke-[1]" />
+                <p className="text-xl font-medium">No results found for "{searchQuery}"</p>
+              </div>
+            )}
           </div>
         ) : (
-          <div className={cn("gap-5", viewMode === 'grid' ? "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6" : "flex flex-col space-y-3 max-w-5xl mx-auto")}>
-            {folders.map((folder) => (
-              <div key={folder.id} className={cn("group text-left border border-white/10 bg-white/5 backdrop-blur-md hover:bg-white/10 hover:border-white/20 hover:shadow-xl transition-all duration-300 rounded-2xl overflow-hidden relative", viewMode === 'grid' ? "aspect-square p-5 flex flex-col items-center justify-center text-center" : "p-4 flex items-center gap-5")}>
-                <button onClick={() => handleFolderClick(folder)} className="absolute inset-0 z-0 cursor-pointer" />
-                <div className={cn("text-indigo-400 relative z-10 pointer-events-none", viewMode === 'grid' ? "mb-4" : "")}>
-                  <FolderIcon size={viewMode === 'grid' ? 56 : 28} className="fill-indigo-500/20 stroke-[1.5]" />
-                  {folder.isLocked && <div className="absolute -bottom-1 -right-1 bg-slate-900 rounded-full p-1.5 shadow-lg border border-white/10"><Lock size={12} className="text-amber-400" /></div>}
-                </div>
-                <div className="flex-1 min-w-0 z-10 pointer-events-none">
-                  <h3 className="font-semibold text-white/90 truncate group-hover:text-white">{folder.name}</h3>
-                  {viewMode === 'list' && <p className="text-xs text-white/40 mt-0.5">Folder</p>}
-                </div>
-                <button onClick={(e) => { e.stopPropagation(); handleDeleteFolder(folder.id); }} className="z-10 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/40 text-red-400 hover:text-red-300 border border-red-400/20 absolute top-2 right-2" title="Delete"><Trash2 size={14} /></button>
-              </div>
+          <div className={cn("max-w-7xl mx-auto grid gap-6", viewMode === 'grid' ? "grid-cols-[repeat(auto-fill,minmax(200px,1fr))]" : "grid-cols-1")}>
+            {getSortedFolders().map(folder => (
+              <FolderItem
+                key={folder.id}
+                folder={folder}
+                viewMode={viewMode}
+                onClick={() => handleFolderClick(folder)}
+                onDelete={() => handleDeleteFolder(folder.id)}
+                draggable={sortBy === 'manual'}
+                onDragStart={(e) => e.dataTransfer.setData("text/plain", JSON.stringify({ id: folder.id, type: 'folder' }))}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => handleDrop(e, folder.id, 'folder')}
+              />
             ))}
 
-            {items.map((item) => {
-              const parsed = parseItemContent(item.content);
-              const imgSrc = getImageSrc(item.imageUrl);
-              return (
-                <div key={item.id} className={cn("group text-left border border-white/10 bg-white/5 backdrop-blur-md hover:bg-white/10 hover:border-white/20 hover:shadow-xl transition-all duration-300 rounded-2xl overflow-hidden relative", viewMode === 'grid' ? "flex flex-col" : "p-4 flex items-center gap-5")}>
-                  {viewMode === 'grid' && (
-                    <button onClick={() => openItemDetail(item)} className="h-32 w-full bg-black/20 border-b border-white/5 flex items-center justify-center overflow-hidden cursor-pointer">
-                      {imgSrc ? <img src={imgSrc} alt={item.title} className="w-full h-full object-cover opacity-70 group-hover:opacity-100 group-hover:scale-105 transition-all duration-500" />
-                        : <div className="text-white/20 group-hover:text-white/60 transition-colors"><FileText size={40} className="stroke-[1.5]" /></div>}
-                    </button>
-                  )}
-                  {viewMode === 'list' && (
-                    <button onClick={() => openItemDetail(item)} className="shrink-0 cursor-pointer">
-                      {imgSrc ? <div className="w-12 h-12 rounded-xl overflow-hidden border border-white/10"><img src={imgSrc} alt={item.title} className="w-full h-full object-cover" /></div>
-                        : <div className="text-white/40 bg-white/5 p-3 rounded-xl border border-white/5 shadow-inner"><FileText size={22} className="stroke-[1.5]" /></div>}
-                    </button>
-                  )}
-                  <button onClick={() => openItemDetail(item)} className={cn("flex-1 min-w-0 flex flex-col justify-center cursor-pointer text-left", viewMode === 'grid' ? "p-4" : "")}>
-                    <h3 className="font-semibold text-white/90 group-hover:text-white truncate">{item.title}</h3>
-                    <p className={cn("text-white/40 truncate", viewMode === 'grid' ? "text-xs mt-1.5" : "text-sm mt-0.5")}>{parsed.body}</p>
-                  </button>
-                  {parsed.url && (
-                    <button onClick={(e) => { e.stopPropagation(); openLink(parsed.url); }} className={cn("text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/20 p-2 rounded-xl transition-all shrink-0 z-10", viewMode === 'grid' ? "absolute top-2 right-2 bg-black/40 backdrop-blur-sm border border-white/10" : "")} title="Open link"><ExternalLink size={16} /></button>
-                  )}
-                </div>
-              );
-            })}
+            {getSortedItems().map(item => (
+              <NoteItem
+                key={item.id}
+                item={item}
+                viewMode={viewMode}
+                imgSrc={getImageSrc(item.imageUrl)}
+                onClick={() => openItemDetail(item)}
+                onOpenLink={openLink}
+                draggable={sortBy === 'manual'}
+                onDragStart={(e) => e.dataTransfer.setData("text/plain", JSON.stringify({ id: item.id, type: 'item' }))}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => handleDrop(e, item.id, 'item')}
+              />
+            ))}
           </div>
         )}
       </main>
 
-      {passwordPrompt.isOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xl z-[100] flex items-center justify-center p-4">
-          <div className="bg-slate-900/60 border border-white/10 rounded-3xl w-full max-w-sm p-8 shadow-2xl backdrop-blur-2xl">
-            <div className="flex flex-col items-center text-center mb-8">
-              <div className="w-16 h-16 bg-indigo-500/20 rounded-full flex items-center justify-center mb-5 border border-indigo-400/30"><Lock size={28} className="text-indigo-300" /></div>
-              <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-br from-white to-white/60">Unlock Folder</h2>
-              <p className="text-white/40 text-sm mt-2">Enter your encryption password</p>
-            </div>
-            <input type="password" autoFocus value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitPassword()} placeholder="Password..." className="w-full bg-black/20 border border-white/10 rounded-2xl px-5 py-4 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all mb-6 shadow-inner" />
-            <div className="flex gap-3">
-              <button onClick={() => setPasswordPrompt({ isOpen: false, targetFolderId: null })} className="flex-1 px-4 py-3.5 rounded-2xl border border-white/10 hover:bg-white/5 font-semibold text-white/70">Cancel</button>
-              <button onClick={submitPassword} className="flex-1 px-4 py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold">Unlock</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <PasswordPrompt
+        isOpen={passwordPrompt.isOpen}
+        passwordInput={passwordInput}
+        setPasswordInput={setPasswordInput}
+        onCancel={() => setPasswordPrompt({ isOpen: false, targetFolderId: null })}
+        onSubmit={submitPassword}
+      />
 
-      {showNewFolderModal && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xl z-[100] flex items-center justify-center p-4">
-          <div className="bg-slate-900/60 border border-white/10 rounded-3xl w-full max-w-md p-8 shadow-2xl backdrop-blur-2xl">
-            <div className="flex items-center justify-between mb-8">
-              <div className="flex items-center gap-4">
-                <div className="p-3 bg-indigo-500/20 rounded-2xl border border-indigo-400/30"><FolderIcon size={22} className="text-indigo-300 fill-indigo-500/20" /></div>
-                <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-br from-white to-white/60">New Folder</h2>
-              </div>
-              <button onClick={() => setShowNewFolderModal(false)} className="text-white/40 hover:text-white bg-white/5 hover:bg-white/10 p-2 rounded-full"><Plus size={20} className="rotate-45" /></button>
-            </div>
-            <div className="space-y-6 mb-8">
-              <div>
-                <label className="text-sm font-semibold text-white/60 mb-2 block ml-1">Folder Name</label>
-                <input type="text" value={newFolderName} onChange={e => setNewFolderName(e.target.value)} autoFocus placeholder="e.g. Passwords" className="w-full bg-black/20 border border-white/10 rounded-2xl px-5 py-4 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner" />
-              </div>
-              <div className="p-5 bg-black/20 border border-white/10 rounded-2xl shadow-inner">
-                <label className="flex items-start gap-4 cursor-pointer group">
-                  <div className="relative flex items-center justify-center mt-1">
-                    <input type="checkbox" checked={newFolderEncrypt} onChange={e => setNewFolderEncrypt(e.target.checked)} className="peer appearance-none w-5 h-5 border-2 border-white/30 rounded-md checked:bg-indigo-500 checked:border-indigo-500" />
-                    <svg className="absolute w-3 h-3 text-white opacity-0 peer-checked:opacity-100 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={4}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
-                  </div>
-                  <div><span className="text-sm font-semibold text-white/90 block">Encrypt & Lock Folder</span><span className="text-xs text-white/40 mt-1 block">Require a password to access.</span></div>
-                </label>
-                {newFolderEncrypt && (
-                  <div className="mt-4 pt-4 border-t border-white/10">
-                    <label className="text-xs font-semibold text-indigo-300 mb-2 block ml-1 flex items-center gap-1"><Lock size={12} /> Custom Password (Optional)</label>
-                    <input type="password" value={newFolderPassword} onChange={e => setNewFolderPassword(e.target.value)} placeholder="Leave blank to use parent's" className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 shadow-inner" />
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setShowNewFolderModal(false)} className="px-6 py-3.5 rounded-2xl border border-white/10 hover:bg-white/5 font-semibold text-white/70">Cancel</button>
-              <button onClick={handleCreateFolder} className="px-6 py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold">Create Folder</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <NewFolderModal
+        isOpen={showNewFolderModal}
+        onClose={() => setShowNewFolderModal(false)}
+        folderName={newFolderName}
+        setFolderName={setNewFolderName}
+        encrypt={newFolderEncrypt}
+        setEncrypt={setNewFolderEncrypt}
+        password={newFolderPassword}
+        setPassword={setNewFolderPassword}
+        onCreate={handleCreateFolder}
+      />
 
-      {showNewItemModal && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xl z-[100] flex items-center justify-center p-4">
-          <div className="bg-slate-900/60 border border-white/10 rounded-3xl w-full max-w-2xl p-8 shadow-2xl backdrop-blur-2xl">
-            <div className="flex items-center justify-between mb-8">
-              <div className="flex items-center gap-4">
-                <div className="p-3 rounded-2xl border shadow-lg bg-amber-500/20 border-amber-400/30"><FileText size={22} className="text-amber-300" /></div>
-                <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-br from-white to-white/60">New Note</h2>
-              </div>
-              <button onClick={() => setShowNewItemModal(false)} className="text-white/40 hover:text-white bg-white/5 hover:bg-white/10 p-2 rounded-full"><Plus size={20} className="rotate-45" /></button>
-            </div>
-            <div className="space-y-4 mb-8">
-              <div>
-                <label className="text-sm font-semibold text-white/60 mb-2 block ml-1">Title</label>
-                <input type="text" value={newItemTitle} onChange={e => setNewItemTitle(e.target.value)} autoFocus placeholder="Enter title..." className="w-full bg-black/20 border border-white/10 rounded-2xl px-5 py-3.5 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner" />
-              </div>
-              <div>
-                <label className="text-sm font-semibold text-emerald-300/80 mb-2 block ml-1">Link URL (Optional)</label>
-                <input type="url" value={newItemUrl} onChange={e => setNewItemUrl(e.target.value)} placeholder="https://" className="w-full bg-black/20 border border-emerald-500/30 rounded-2xl px-5 py-3.5 text-emerald-100 placeholder-emerald-900/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 shadow-inner" />
-              </div>
-              <div>
-                <label className="text-sm font-semibold text-pink-300/80 mb-2 block ml-1">Preview Image (Click & Paste supported)</label>
-                <button
-                  type="button"
-                  onClick={async () => { const f = await pickImage(); if (f) setNewItemImageFilename(f); }}
-                  onPaste={async (e) => {
-                    const items = e.clipboardData.items;
-                    for (let i = 0; i < items.length; i++) {
-                      if (items[i].type.indexOf('image') !== -1) {
-                        e.preventDefault();
-                        const file = items[i].getAsFile();
-                        if (!file) continue;
-                        const reader = new FileReader();
-                        reader.onload = async (event) => {
-                          const base64Data = event.target?.result as string;
-                          try {
-                            const filename = await invoke<string>("save_base64_image", { base64Data });
-                            setNewItemImageFilename(filename);
-                          } catch (err) { alert("Failed to save pasted image: " + err); }
-                        };
-                        reader.readAsDataURL(file);
-                        break;
-                      }
-                    }
-                  }}
-                  className="w-full bg-black/20 border border-pink-500/30 rounded-2xl px-5 py-3.5 text-left flex items-center gap-3 hover:bg-black/30 outline-none focus:ring-2 focus:ring-pink-500/50"
-                  title="Click to select or paste an image (Ctrl+V)"
-                >
-                  <ImagePlus size={18} className="text-pink-400" />
-                  <span className={newItemImageFilename ? "text-pink-100" : "text-pink-900/50"}>{newItemImageFilename ? "Image selected ✓ (Paste to replace)" : "Choose or paste an image file..."}</span>
-                </button>
-              </div>
-            </div>
-            <div>
-              <label className="text-sm font-semibold text-amber-300/80 mb-2 block ml-1 flex justify-between"><span>Content</span><span className="text-xs font-normal text-white/30">Markdown Supported</span></label>
-              <div className="bg-black/20 border border-amber-500/30 rounded-2xl overflow-hidden shadow-inner focus-within:ring-2 focus-within:ring-amber-500/50 transition-all">
-                <div className="flex items-center gap-1 bg-black/40 px-3 py-2 border-b border-amber-500/20">
-                  <button type="button" onClick={() => {
+      <EditFolderModal
+        isOpen={showEditFolderModal}
+        onClose={() => { setShowEditFolderModal(false); setNewFolderPassword(""); }}
+        folderName={newFolderName}
+        setFolderName={setNewFolderName}
+        encrypt={newFolderEncrypt}
+        setEncrypt={setNewFolderEncrypt}
+        password={newFolderPassword}
+        setPassword={setNewFolderPassword}
+        onSave={handleEditFolder}
+      />
+
+      <NewItemModal
+        isOpen={showNewItemModal}
+        onClose={() => setShowNewItemModal(false)}
+        title={newItemTitle}
+        setTitle={setNewItemTitle}
+        url={newItemUrl}
+        setUrl={setNewItemUrl}
+        content={newItemContent}
+        setContent={setNewItemContent}
+        imageFilename={newItemImageFilename}
+        setImageFilename={setNewItemImageFilename}
+        onPickImage={async () => { const f = await pickImage(); if (f) setNewItemImageFilename(f); }}
+        onPasteImage={async (e) => {
+          const items = (e as any).clipboardData.items;
+          for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image') !== -1) {
+              e.preventDefault();
+              const file = items[i].getAsFile();
+              if (!file) continue;
+              const reader = new FileReader();
+              reader.onload = async (event) => {
+                const base64Data = event.target?.result as string;
+                try {
+                  const filename = await invoke<string>("save_base64_image", { base64Data });
+
+                  if ((e.target as any).tagName === 'TEXTAREA' || (e.target as any).id === 'new-item-content') {
                     const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
-                    if (!txt) return;
-                    const start = txt.selectionStart; const end = txt.selectionEnd;
-                    setNewItemContent(prev => prev.substring(0, start) + "**" + prev.substring(start, end) + "**" + prev.substring(end));
-                  }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Bold"><Bold size={16} /></button>
-                  <button type="button" onClick={() => {
-                    const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
-                    if (!txt) return;
-                    const start = txt.selectionStart; const end = txt.selectionEnd;
-                    setNewItemContent(prev => prev.substring(0, start) + "*" + prev.substring(start, end) + "*" + prev.substring(end));
-                  }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Italic"><Italic size={16} /></button>
-                  <button type="button" onClick={() => {
-                    const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
-                    if (!txt) return;
-                    const start = txt.selectionStart;
-                    setNewItemContent(prev => prev.substring(0, start) + "\n### " + prev.substring(start));
-                  }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Heading"><Heading size={16} /></button>
-                  <button type="button" onClick={() => {
-                    const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
-                    if (!txt) return;
-                    const start = txt.selectionStart; const end = txt.selectionEnd;
-                    setNewItemContent(prev => prev.substring(0, start) + "`" + prev.substring(start, end) + "`" + prev.substring(end));
-                  }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Code"><Code size={16} /></button>
-                  <button type="button" onClick={() => {
-                    const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
-                    if (!txt) return;
-                    const start = txt.selectionStart; const end = txt.selectionEnd;
-                    setNewItemContent(prev => prev.substring(0, start) + "[" + prev.substring(start, end) + "](url)" + prev.substring(end));
-                  }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Link"><LinkIcon size={16} /></button>
-                </div>
-                <textarea id="new-item-content" rows={6} value={newItemContent} onChange={e => setNewItemContent(e.target.value)}
-                  onPaste={async (e) => {
-                    const items = e.clipboardData.items;
-                    for (let i = 0; i < items.length; i++) {
-                      if (items[i].type.indexOf('image') !== -1) {
-                        e.preventDefault();
-                        const file = items[i].getAsFile();
-                        if (!file) continue;
-                        const reader = new FileReader();
-                        reader.onload = async (event) => {
-                          const base64Data = event.target?.result as string;
-                          try {
-                            const filename = await invoke<string>("save_base64_image", { base64Data });
-                            const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
-                            const start = txt ? txt.selectionStart : newItemContent.length;
-                            setNewItemContent(prev => prev.substring(0, start) + `\n![pasted image](${filename})\n` + prev.substring(start));
-                          } catch (err) { alert("Failed to save pasted image: " + err); }
-                        };
-                        reader.readAsDataURL(file);
-                        break;
-                      }
-                    }
-                  }}
-                  placeholder="Type your note here... (Paste images directly!)" className="w-full bg-transparent p-5 text-white placeholder-amber-900/50 focus:outline-none font-mono text-sm resize-none" />
-              </div>
-            </div>
-          </div>
-          <div className="flex justify-end gap-3">
-            <button onClick={() => setShowNewItemModal(false)} className="px-6 py-3.5 rounded-2xl border border-white/10 hover:bg-white/5 font-semibold text-white/70">Cancel</button>
-            <button onClick={handleCreateItem} className="px-6 py-3.5 rounded-2xl text-white font-semibold shadow-lg bg-amber-600 hover:bg-amber-500">Save Item</button>
-          </div>
-        </div>
-      )}
+                    const start = txt ? txt.selectionStart : newItemContent.length;
+                    setNewItemContent(prev => prev.substring(0, start) + `\n![pasted image](${filename})\n` + prev.substring(start));
+                  } else {
+                    setNewItemImageFilename(filename);
+                  }
+                } catch (err) { alert("Failed to save pasted image: " + err); }
+              };
+              reader.readAsDataURL(file);
+              break;
+            }
+          }
+        }}
+        onCreate={handleCreateItem}
+      />
     </div>
   );
 }

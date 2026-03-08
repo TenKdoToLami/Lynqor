@@ -3,7 +3,9 @@ export type Folder = {
     parentId: string | null;
     name: string;
     isLocked: boolean;
+    orderIndex: number;
     createdAt: string;
+    updatedAt: string;
 };
 
 export type ItemType = 'NOTE';
@@ -15,5 +17,7 @@ export type Item = {
     title: string;
     content: string;
     imageUrl?: string;
+    orderIndex: number;
     createdAt: string;
+    updatedAt: string;
 };

@@ -29,7 +29,10 @@ pub fn run() {
             commands::get_image_base64,
             commands::delete_folder,
             commands::get_folders_by_parent,
-            commands::get_items_by_folder
+            commands::get_items_by_folder,
+            commands::update_folder_with_key,
+            commands::update_order_index,
+            commands::search_items
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
