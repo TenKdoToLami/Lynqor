@@ -24,9 +24,11 @@ pub fn init_db(app_handle: &tauri::AppHandle) -> Result<Connection, String> {
             id TEXT PRIMARY KEY,
             parent_id TEXT,
             name_encrypted BLOB,
+            description_encrypted BLOB,
             folder_key_encrypted BLOB,
             is_locked INTEGER DEFAULT 0,
             password_salt TEXT,
+            image_url TEXT,
             order_index REAL DEFAULT 0.0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -98,19 +100,43 @@ pub fn init_db(app_handle: &tauri::AppHandle) -> Result<Connection, String> {
     }
 
     // Migration: add image_url column if missing
-    let has_image_url: bool = conn
+    let has_image_url_in_items: bool = conn
         .query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='items'",
             [],
             |row| {
                 let sql: String = row.get(0)?;
-                Ok(sql.contains("image_url"))
+                Ok(sql.contains("image_url TEXT"))
             },
         )
         .unwrap_or(false);
 
-    if !has_image_url {
+    if !has_image_url_in_items {
         conn.execute("ALTER TABLE items ADD COLUMN image_url TEXT", [])
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Migration: add description_encrypted and image_url to folders if missing
+    let folders_sql_for_new_cols: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='folders'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or_default();
+
+    if !folders_sql_for_new_cols.contains("description_encrypted BLOB") {
+        // SQLite ALTER TABLE allows adding columns one by one
+        conn.execute(
+            "ALTER TABLE folders ADD COLUMN description_encrypted BLOB",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    // Check for image_url in folders, though it's already in the initial CREATE TABLE,
+    // this handles cases where an older DB might not have it.
+    if !folders_sql_for_new_cols.contains("image_url TEXT") {
+        conn.execute("ALTER TABLE folders ADD COLUMN image_url TEXT", [])
             .map_err(|e| e.to_string())?;
     }
 

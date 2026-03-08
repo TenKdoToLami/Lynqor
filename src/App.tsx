@@ -52,6 +52,8 @@ export default function App() {
   const [newItemType, setNewItemType] = useState<ItemType | null>(null);
 
   const [newFolderName, setNewFolderName] = useState("");
+  const [newFolderDescription, setNewFolderDescription] = useState("");
+  const [newFolderImageFilename, setNewFolderImageFilename] = useState("");
   const [newFolderEncrypt, setNewFolderEncrypt] = useState(false);
   const [newFolderPassword, setNewFolderPassword] = useState("");
   const [newItemTitle, setNewItemTitle] = useState("");
@@ -66,15 +68,24 @@ export default function App() {
       setFolders(foldersData);
       const itemsData = await invoke<Item[]>("get_items_by_folder", { folderId: currentFolderId, folderKey: currentFolderKey });
       setItems(itemsData);
+
       const paths: Record<string, string> = {};
-      for (const item of itemsData) {
-        if (item.imageUrl) {
+
+      const fetchImage = async (url: string) => {
+        if (!paths[url]) {
           try {
-            const dataUrl = await invoke<string>("get_image_base64", { filename: item.imageUrl });
-            paths[item.imageUrl] = dataUrl;
+            paths[url] = await invoke<string>("get_image_base64", { filename: url });
           } catch { /* skip */ }
         }
+      };
+
+      for (const folder of foldersData) {
+        if (folder.imageUrl) await fetchImage(folder.imageUrl);
       }
+      for (const item of itemsData) {
+        if (item.imageUrl) await fetchImage(item.imageUrl);
+      }
+
       setImagePaths(paths);
       console.log("Loaded folders:", foldersData);
       console.log("Loaded items:", itemsData);
@@ -132,8 +143,22 @@ export default function App() {
 
   const handleCreateFolder = async () => {
     try {
-      await invoke("create_folder", { id: crypto.randomUUID(), parentId: currentFolderId, name: newFolderName, password: newFolderEncrypt ? (newFolderPassword || undefined) : undefined, parentFolderKey: currentFolderKey });
-      setShowNewFolderModal(false); setNewFolderName(""); setNewFolderPassword(""); setNewFolderEncrypt(false); loadData();
+      await invoke("create_folder", {
+        id: crypto.randomUUID(),
+        parentId: currentFolderId,
+        name: newFolderName,
+        description: newFolderDescription || null,
+        imageUrl: newFolderImageFilename || null,
+        password: newFolderEncrypt ? (newFolderPassword || undefined) : undefined,
+        parentFolderKey: currentFolderKey
+      });
+      setShowNewFolderModal(false);
+      setNewFolderName("");
+      setNewFolderDescription("");
+      setNewFolderImageFilename("");
+      setNewFolderPassword("");
+      setNewFolderEncrypt(false);
+      loadData();
     } catch (e) { alert("Failed to create folder: " + e); }
   };
 
@@ -247,6 +272,8 @@ export default function App() {
       await invoke("update_folder_with_key", {
         id: currentFolderId,
         name: newFolderName,
+        description: newFolderDescription || null,
+        imageUrl: newFolderImageFilename || null,
         password: newFolderEncrypt ? newFolderPassword : null,
         currentFolderKey: currentKey,
         parentFolderKey: parentKey
@@ -254,6 +281,8 @@ export default function App() {
 
       setShowEditFolderModal(false);
       setNewFolderPassword("");
+      setNewFolderDescription("");
+      setNewFolderImageFilename("");
       loadData();
 
       // Update folder path name if it changed
@@ -320,6 +349,8 @@ export default function App() {
                 onEditFolder={() => {
                   const target = folderPath[folderPath.length - 1];
                   setNewFolderName(target.name);
+                  setNewFolderDescription(target.description || "");
+                  setNewFolderImageFilename(target.imageUrl || "");
                   setNewFolderEncrypt(target.isLocked);
                   setShowEditFolderModal(true);
                 }}
@@ -369,6 +400,7 @@ export default function App() {
                     key={res.id}
                     folder={{ id: res.id, name: res.name, isLocked: false, parentId: res.parentId || null, orderIndex: 0, createdAt: "", updatedAt: "" }}
                     viewMode={viewMode}
+                    imgSrc={getImageSrc(res.imageUrl)}
                     onClick={() => handleFolderClick(res as any)}
                     onDelete={() => { }}
                     draggable={false}
@@ -406,6 +438,7 @@ export default function App() {
                 key={folder.id}
                 folder={folder}
                 viewMode={viewMode}
+                imgSrc={getImageSrc(folder.imageUrl)}
                 onClick={() => handleFolderClick(folder)}
                 onDelete={() => handleDeleteFolder(folder.id)}
                 draggable={sortBy === 'manual'}
@@ -443,25 +476,71 @@ export default function App() {
 
       <NewFolderModal
         isOpen={showNewFolderModal}
-        onClose={() => setShowNewFolderModal(false)}
+        onClose={() => { setShowNewFolderModal(false); setNewFolderDescription(""); setNewFolderImageFilename(""); }}
         folderName={newFolderName}
         setFolderName={setNewFolderName}
+        folderDescription={newFolderDescription}
+        setFolderDescription={setNewFolderDescription}
         encrypt={newFolderEncrypt}
         setEncrypt={setNewFolderEncrypt}
         password={newFolderPassword}
         setPassword={setNewFolderPassword}
+        imageFilename={newFolderImageFilename}
+        onPickImage={async () => { const img = await pickImage(); if (img) setNewFolderImageFilename(img); }}
+        onPasteImage={async (e) => {
+          const items = e.clipboardData.items;
+          for (const item of items) {
+            if (item.type.startsWith('image/')) {
+              const file = item.getAsFile();
+              if (file) {
+                const reader = new FileReader();
+                reader.onload = async (event) => {
+                  const b64 = event.target?.result as string;
+                  try {
+                    const filename = await invoke<string>("save_base64_image", { base64Data: b64 });
+                    setNewFolderImageFilename(filename);
+                  } catch (err) { alert("Failed to save pasted image: " + err); }
+                };
+                reader.readAsDataURL(file);
+              }
+            }
+          }
+        }}
         onCreate={handleCreateFolder}
       />
 
       <EditFolderModal
         isOpen={showEditFolderModal}
-        onClose={() => { setShowEditFolderModal(false); setNewFolderPassword(""); }}
+        onClose={() => { setShowEditFolderModal(false); setNewFolderPassword(""); setNewFolderDescription(""); setNewFolderImageFilename(""); }}
         folderName={newFolderName}
         setFolderName={setNewFolderName}
+        folderDescription={newFolderDescription}
+        setFolderDescription={setNewFolderDescription}
         encrypt={newFolderEncrypt}
         setEncrypt={setNewFolderEncrypt}
         password={newFolderPassword}
         setPassword={setNewFolderPassword}
+        imageFilename={newFolderImageFilename}
+        onPickImage={async () => { const img = await pickImage(); if (img) setNewFolderImageFilename(img); }}
+        onPasteImage={async (e) => {
+          const items = e.clipboardData.items;
+          for (const item of items) {
+            if (item.type.startsWith('image/')) {
+              const file = item.getAsFile();
+              if (file) {
+                const reader = new FileReader();
+                reader.onload = async (event) => {
+                  const b64 = event.target?.result as string;
+                  try {
+                    const filename = await invoke<string>("save_base64_image", { base64Data: b64 });
+                    setNewFolderImageFilename(filename);
+                  } catch (err) { alert("Failed to save pasted image: " + err); }
+                };
+                reader.readAsDataURL(file);
+              }
+            }
+          }
+        }}
         onSave={handleEditFolder}
       />
 

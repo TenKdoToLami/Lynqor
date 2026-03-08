@@ -13,6 +13,8 @@ pub struct Folder {
     pub id: String,
     pub parent_id: Option<String>,
     pub name: String,
+    pub description: Option<String>,
+    pub image_url: Option<String>,
     pub is_locked: bool,
     pub order_index: f64,
     pub created_at: String,
@@ -39,6 +41,8 @@ pub fn create_folder(
     id: String,
     parent_id: Option<String>,
     name: String,
+    description: Option<String>,
+    image_url: Option<String>,
     password: Option<String>,
     parent_folder_key: Option<Vec<u8>>,
 ) -> Result<(), String> {
@@ -68,11 +72,12 @@ pub fn create_folder(
     };
 
     let encrypted_name = encrypt_aes_gcm(&name_kek, name.as_bytes());
+    let encrypted_desc = encrypt_aes_gcm(&folder_key, description.unwrap_or_default().as_bytes());
     let encrypted_folder_key = encrypt_aes_gcm(&kek, &folder_key);
 
     conn.execute(
-        "INSERT INTO folders (id, parent_id, name_encrypted, folder_key_encrypted, is_locked, password_salt) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![id, parent_id, encrypted_name, encrypted_folder_key, is_locked, salt],
+        "INSERT INTO folders (id, parent_id, name_encrypted, description_encrypted, image_url, folder_key_encrypted, is_locked, password_salt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![id, parent_id, encrypted_name, encrypted_desc, image_url, encrypted_folder_key, is_locked, salt],
     ).map_err(|e| e.to_string())?;
 
     Ok(())
@@ -328,8 +333,8 @@ pub fn get_folders_by_parent(
     let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
 
     let query = match parent_id {
-        Some(_) => "SELECT id, parent_id, name_encrypted, is_locked, created_at, folder_key_encrypted, order_index, updated_at FROM folders WHERE parent_id = ?1",
-        None => "SELECT id, parent_id, name_encrypted, is_locked, created_at, folder_key_encrypted, order_index, updated_at FROM folders WHERE parent_id IS NULL",
+        Some(_) => "SELECT id, parent_id, name_encrypted, description_encrypted, image_url, is_locked, created_at, folder_key_encrypted, order_index, updated_at FROM folders WHERE parent_id = ?1",
+        None => "SELECT id, parent_id, name_encrypted, description_encrypted, image_url, is_locked, created_at, folder_key_encrypted, order_index, updated_at FROM folders WHERE parent_id IS NULL",
     };
 
     let mut stmt = conn.prepare(query).map_err(|e| e.to_string())?;
@@ -346,11 +351,13 @@ pub fn get_folders_by_parent(
         let id: String = row.get(0).unwrap();
         let pid: Option<String> = row.get(1).unwrap();
         let name_encrypted: Vec<u8> = row.get(2).unwrap();
-        let is_locked: bool = row.get(3).unwrap_or(false);
-        let created_at: String = row.get(4).unwrap_or_else(|_| "".to_string());
-        let folder_key_encrypted: Vec<u8> = row.get(5).unwrap();
-        let order_index: f64 = row.get(6).unwrap_or(0.0);
-        let updated_at: String = row.get(7).unwrap_or_else(|_| "".to_string());
+        let desc_encrypted: Option<Vec<u8>> = row.get(3).unwrap_or(None);
+        let image_url: Option<String> = row.get(4).unwrap_or(None);
+        let is_locked: bool = row.get(5).unwrap_or(false);
+        let created_at: String = row.get(6).unwrap_or_else(|_| "".to_string());
+        let folder_key_encrypted: Vec<u8> = row.get(7).unwrap();
+        let order_index: f64 = row.get(8).unwrap_or(0.0);
+        let updated_at: String = row.get(9).unwrap_or_else(|_| "".to_string());
 
         let key_to_use = folder_key.as_ref().unwrap_or(&default_key);
         let mut decrypted_name = match decrypt_aes_gcm(key_to_use, &name_encrypted) {
@@ -371,12 +378,25 @@ pub fn get_folders_by_parent(
             }
         };
 
+        let mut decrypted_desc = None;
+        if let Some(desc_enc) = desc_encrypted {
+            if let Ok(dec) = decrypt_aes_gcm(key_to_use, &desc_enc) {
+                if let Ok(s) = String::from_utf8(dec) {
+                    if !s.is_empty() {
+                        decrypted_desc = Some(s);
+                    }
+                }
+            }
+        }
+
         let name = decrypted_name;
 
         folders.push(Folder {
             id,
             parent_id: pid,
             name,
+            description: decrypted_desc,
+            image_url,
             is_locked,
             order_index,
             created_at,
@@ -452,6 +472,8 @@ pub fn update_folder_with_key(
     app_handle: tauri::AppHandle,
     id: String,
     name: String,
+    description: Option<String>,
+    image_url: Option<String>,
     password: Option<String>,
     current_folder_key: Vec<u8>,
     parent_folder_key: Option<Vec<u8>>,
@@ -480,11 +502,15 @@ pub fn update_folder_with_key(
     };
 
     let encrypted_name = encrypt_aes_gcm(&name_kek, name.as_bytes());
+    let encrypted_desc = encrypt_aes_gcm(
+        &current_folder_key,
+        description.unwrap_or_default().as_bytes(),
+    );
     let encrypted_folder_key = encrypt_aes_gcm(&kek, &current_folder_key);
 
     conn.execute(
-        "UPDATE folders SET name_encrypted = ?1, folder_key_encrypted = ?2, is_locked = ?3, password_salt = ?4, updated_at = CURRENT_TIMESTAMP WHERE id = ?5",
-        rusqlite::params![encrypted_name, encrypted_folder_key, is_locked, salt, id],
+        "UPDATE folders SET name_encrypted = ?1, description_encrypted = ?2, image_url = ?3, folder_key_encrypted = ?4, is_locked = ?5, password_salt = ?6, updated_at = CURRENT_TIMESTAMP WHERE id = ?7",
+        rusqlite::params![encrypted_name, encrypted_desc, image_url, encrypted_folder_key, is_locked, salt, id],
     ).map_err(|e| e.to_string())?;
 
     Ok(())
@@ -550,11 +576,11 @@ pub fn search_items(
 
     let (mut folder_stmt, mut item_stmt) = match current_folder_id {
         Some(_) => (
-            conn.prepare("SELECT id, name_encrypted, is_locked, folder_key_encrypted FROM folders WHERE parent_id = ?1").map_err(|e| e.to_string())?,
+            conn.prepare("SELECT id, name_encrypted, description_encrypted, image_url, is_locked, folder_key_encrypted FROM folders WHERE parent_id = ?1").map_err(|e| e.to_string())?,
             conn.prepare("SELECT id, item_type, title_encrypted, content_encrypted, image_url FROM items WHERE folder_id = ?1").map_err(|e| e.to_string())?
         ),
         None => (
-            conn.prepare("SELECT id, name_encrypted, is_locked, folder_key_encrypted FROM folders WHERE parent_id IS NULL").map_err(|e| e.to_string())?,
+            conn.prepare("SELECT id, name_encrypted, description_encrypted, image_url, is_locked, folder_key_encrypted FROM folders WHERE parent_id IS NULL").map_err(|e| e.to_string())?,
             conn.prepare("SELECT id, item_type, title_encrypted, content_encrypted, image_url FROM items WHERE folder_id IS NULL").map_err(|e| e.to_string())?
         )
     };
@@ -612,8 +638,10 @@ pub fn search_items(
     while let Some(row) = folder_rows.next().map_err(|e| e.to_string())? {
         let id: String = row.get(0).unwrap();
         let name_enc: Vec<u8> = row.get(1).unwrap();
-        let is_locked: bool = row.get(2).unwrap();
-        let folder_key_enc: Vec<u8> = row.get(3).unwrap();
+        let desc_enc: Option<Vec<u8>> = row.get(2).unwrap_or(None);
+        let image_url: Option<String> = row.get(3).unwrap_or(None);
+        let is_locked: bool = row.get(4).unwrap();
+        let folder_key_enc: Vec<u8> = row.get(5).unwrap();
 
         let mut folder_key_to_use = None;
         if !is_locked {
@@ -629,15 +657,30 @@ pub fn search_items(
         if let Some(fk) = folder_key_to_use {
             if let Ok(dec) = decrypt_aes_gcm(&fk, &name_enc) {
                 if let Ok(name) = String::from_utf8(dec) {
-                    if name.to_lowercase().contains(&query_lower) {
+                    let mut desc_str = String::new();
+                    if let Some(de) = desc_enc {
+                        if let Ok(d_dec) = decrypt_aes_gcm(&fk, &de) {
+                            if let Ok(d_str) = String::from_utf8(d_dec) {
+                                desc_str = d_str;
+                            }
+                        }
+                    }
+
+                    if name.to_lowercase().contains(&query_lower)
+                        || desc_str.to_lowercase().contains(&query_lower)
+                    {
                         results.push(SearchResult {
                             id,
                             is_folder: true,
                             name,
-                            content: None,
+                            content: if desc_str.is_empty() {
+                                None
+                            } else {
+                                Some(desc_str)
+                            },
                             parent_id: current_folder_id.clone(),
                             item_type: None,
-                            image_url: None,
+                            image_url,
                         });
                     }
                 }

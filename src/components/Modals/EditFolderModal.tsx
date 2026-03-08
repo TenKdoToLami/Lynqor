@@ -5,10 +5,15 @@ interface EditFolderModalProps {
     onClose: () => void;
     folderName: string;
     setFolderName: (val: string) => void;
+    folderDescription: string;
+    setFolderDescription: (val: string) => void;
     encrypt: boolean;
     setEncrypt: (val: boolean) => void;
     password: string;
     setPassword: (val: string) => void;
+    imageFilename: string;
+    onPickImage: () => void;
+    onPasteImage: (e: React.ClipboardEvent) => void;
     onSave: () => void;
 }
 
@@ -17,10 +22,15 @@ export function EditFolderModal({
     onClose,
     folderName,
     setFolderName,
+    folderDescription,
+    setFolderDescription,
     encrypt,
     setEncrypt,
     password,
     setPassword,
+    imageFilename,
+    onPickImage,
+    onPasteImage,
     onSave
 }: EditFolderModalProps) {
     if (!isOpen) return null;
@@ -49,6 +59,33 @@ export function EditFolderModal({
                             autoFocus
                             className="w-full bg-black/20 border border-white/10 rounded-2xl px-5 py-4 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner"
                         />
+                    </div>
+                    <div>
+                        <label className="text-sm font-semibold text-white/60 mb-2 block ml-1">Description (Optional)</label>
+                        <input
+                            type="text"
+                            value={folderDescription}
+                            onChange={e => setFolderDescription(e.target.value)}
+                            placeholder="Brief description..."
+                            className="w-full bg-black/20 border border-white/10 rounded-2xl px-5 py-3.5 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-sm font-semibold text-pink-300/80 mb-2 block ml-1">Background Image (Optional)</label>
+                        <button
+                            type="button"
+                            onClick={onPickImage}
+                            onPaste={onPasteImage}
+                            className="w-full bg-black/20 border border-pink-500/30 rounded-2xl px-5 py-3.5 text-left flex items-center gap-3 hover:bg-black/30 outline-none focus:ring-2 focus:ring-pink-500/50"
+                            title="Click to select or paste an image (Ctrl+V)"
+                        >
+                            <span className="text-pink-400">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" x2="12" y1="3" y2="15" /></svg>
+                            </span>
+                            <span className={imageFilename ? "text-pink-100" : "text-pink-900/50"}>
+                                {imageFilename ? "Image selected ✓ (Paste to replace)" : "Choose or paste an image file..."}
+                            </span>
+                        </button>
                     </div>
                     <div className="p-5 bg-black/20 border border-white/10 rounded-2xl shadow-inner">
                         <label className="flex items-start gap-4 cursor-pointer group">

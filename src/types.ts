@@ -2,6 +2,8 @@ export type Folder = {
     id: string;
     parentId: string | null;
     name: string;
+    description?: string;
+    imageUrl?: string;
     isLocked: boolean;
     orderIndex: number;
     createdAt: string;
