@@ -29,3 +29,4 @@ uuid = { version = "1.8.0", features = ["v4", "serde"] }
 rand = "0.8.5"
 tauri-plugin-dialog = "2"
 base64 = "0.22.1"
+chrono = "0.4"

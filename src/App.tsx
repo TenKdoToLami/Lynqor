@@ -61,12 +61,53 @@ export default function App() {
   const [newItemContent, setNewItemContent] = useState("");
   const [newItemImageFilename, setNewItemImageFilename] = useState("");
   const [imagePaths, setImagePaths] = useState<Record<string, string>>({});
+  const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
+  const [isBusy, setIsBusy] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  // Auto-dismiss toast after 2.5s
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2500);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // Auto-lock timeout (5 minutes)
+  const AUTO_LOCK_MS = 5 * 60 * 1000;
+  const autoLockTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
+
+  // Derive rootLockedFolderId from the folder path
+  const rootLockedFolderId = folderPath.find(f => f.isLocked)?.id || null;
+
+  // Reset auto-lock timer on any user activity
+  useEffect(() => {
+    if (!rootLockedFolderId) return;
+    const resetTimer = () => {
+      if (autoLockTimerRef.current) clearTimeout(autoLockTimerRef.current);
+      autoLockTimerRef.current = setTimeout(() => {
+        setCurrentFolderId(null);
+        setCurrentFolderKey(null);
+        setFolderPath([]);
+        alert("Auto-locked due to inactivity.");
+      }, AUTO_LOCK_MS);
+    };
+    resetTimer();
+    window.addEventListener('mousemove', resetTimer);
+    window.addEventListener('keydown', resetTimer);
+    window.addEventListener('click', resetTimer);
+    return () => {
+      if (autoLockTimerRef.current) clearTimeout(autoLockTimerRef.current);
+      window.removeEventListener('mousemove', resetTimer);
+      window.removeEventListener('keydown', resetTimer);
+      window.removeEventListener('click', resetTimer);
+    };
+  }, [rootLockedFolderId]);
 
   const loadData = useCallback(async () => {
     try {
-      const foldersData = await invoke<Folder[]>("get_folders_by_parent", { parentId: currentFolderId, folderKey: currentFolderKey });
+      const foldersData = await invoke<Folder[]>("get_folders_by_parent", { parentId: currentFolderId, folderKey: currentFolderKey, rootFolderId: rootLockedFolderId });
       setFolders(foldersData);
-      const itemsData = await invoke<Item[]>("get_items_by_folder", { folderId: currentFolderId, folderKey: currentFolderKey });
+      const itemsData = await invoke<Item[]>("get_items_by_folder", { folderId: currentFolderId, folderKey: currentFolderKey, rootFolderId: rootLockedFolderId });
       setItems(itemsData);
 
       const paths: Record<string, string> = {};
@@ -90,7 +131,7 @@ export default function App() {
       console.log("Loaded folders:", foldersData);
       console.log("Loaded items:", itemsData);
     } catch (e) { console.error("Data load failed:", e); }
-  }, [currentFolderId, currentFolderKey]);
+  }, [currentFolderId, currentFolderKey, rootLockedFolderId]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -122,26 +163,44 @@ export default function App() {
     return () => { unlisteners.forEach(u => u()); };
   }, []);
 
-  const navigateToRoot = () => { setCurrentFolderId(null); setCurrentFolderKey(null); setFolderPath([]); };
-  const navigateToBreadcrumb = (crumb: Folder, idx: number) => { setCurrentFolderId(crumb.id); setFolderPath(folderPath.slice(0, idx + 1)); setCurrentFolderKey(null); };
+  const navigateToRoot = () => {
+    if (currentFolderId === null) { loadData(); return; }
+    setFolders([]); setItems([]); setImagePaths({});
+    setCurrentFolderId(null); setCurrentFolderKey(null); setFolderPath([]);
+  };
+  const navigateToBreadcrumb = (crumb: Folder, idx: number) => {
+    if (currentFolderId === crumb.id) { loadData(); return; }
+    setFolders([]); setItems([]); setImagePaths({});
+    setCurrentFolderId(crumb.id); setFolderPath(folderPath.slice(0, idx + 1)); setCurrentFolderKey(null);
+  };
 
   const handleFolderClick = (folder: Folder) => {
     if (folder.isLocked) setPasswordPrompt({ isOpen: true, targetFolderId: folder.id });
-    else { setCurrentFolderId(folder.id); setFolderPath([...folderPath, folder]); }
+    else if (currentFolderId === folder.id) { loadData(); }
+    else { setFolders([]); setItems([]); setImagePaths({}); setCurrentFolderId(folder.id); setFolderPath([...folderPath, folder]); }
   };
 
   const submitPassword = async () => {
-    if (!passwordPrompt.targetFolderId) return;
+    if (!passwordPrompt.targetFolderId || isBusy) return;
+    setIsBusy(true);
+    setLoadingMessage("Decrypting vault…");
+    // Let React paint the overlay before the heavy invoke blocks
+    await new Promise(r => setTimeout(r, 50));
     try {
       const tf = folders.find(f => f.id === passwordPrompt.targetFolderId);
       const k = await invoke<number[]>("unlock_folder", { folderId: passwordPrompt.targetFolderId, password: passwordInput, parentFolderKey: currentFolderKey });
+      setFolders([]); setItems([]); setImagePaths({});
       setCurrentFolderId(passwordPrompt.targetFolderId); setCurrentFolderKey(k);
       if (tf) setFolderPath([...folderPath, tf]);
-    } catch (e) { alert("Failed to unlock: " + e); }
-    finally { setPasswordPrompt({ isOpen: false, targetFolderId: null }); setPasswordInput(""); }
+      setToast({ message: "Vault unlocked", type: 'success' });
+    } catch (e) { setToast({ message: "Failed to unlock: " + e, type: 'error' }); }
+    finally { setPasswordPrompt({ isOpen: false, targetFolderId: null }); setPasswordInput(""); setLoadingMessage(null); setIsBusy(false); }
   };
 
   const handleCreateFolder = async () => {
+    if (isBusy) return;
+    setIsBusy(true);
+    if (newFolderEncrypt) { setLoadingMessage("Encrypting new folder…"); await new Promise(r => setTimeout(r, 50)); }
     try {
       await invoke("create_folder", {
         id: crypto.randomUUID(),
@@ -150,7 +209,8 @@ export default function App() {
         description: newFolderDescription || null,
         imageUrl: newFolderImageFilename || null,
         password: newFolderEncrypt ? (newFolderPassword || undefined) : undefined,
-        parentFolderKey: currentFolderKey
+        parentFolderKey: currentFolderKey,
+        rootFolderId: rootLockedFolderId
       });
       setShowNewFolderModal(false);
       setNewFolderName("");
@@ -159,20 +219,26 @@ export default function App() {
       setNewFolderPassword("");
       setNewFolderEncrypt(false);
       loadData();
-    } catch (e) { alert("Failed to create folder: " + e); }
+      setToast({ message: "Folder created", type: 'success' });
+    } catch (e) { setToast({ message: "Failed to create folder: " + e, type: 'error' }); }
+    finally { setLoadingMessage(null); setIsBusy(false); }
   };
 
   const handleDeleteFolder = async (folderId: string) => {
+    if (isBusy) return;
     try {
       const confirmed = await ask("Are you sure you want to delete this folder? This will delete all its contents and cannot be undone.", {
         title: "Delete Folder",
         kind: "warning",
       });
       if (confirmed) {
-        await invoke("delete_folder", { id: folderId });
+        setIsBusy(true);
+        await invoke("delete_folder", { id: folderId, rootFolderId: rootLockedFolderId, parentFolderKey: currentFolderKey });
         loadData();
+        setToast({ message: "Folder deleted", type: 'success' });
       }
-    } catch (e) { alert("Failed to delete folder: " + e); }
+    } catch (e) { setToast({ message: "Failed to delete folder: " + e, type: 'error' }); }
+    finally { setIsBusy(false); }
   };
 
   const pickImage = async (): Promise<string> => {
@@ -182,10 +248,14 @@ export default function App() {
   };
 
   const handleCreateItem = async () => {
+    if (isBusy) return;
+    setIsBusy(true);
     try {
-      await invoke("create_item", { id: crypto.randomUUID(), folderId: currentFolderId, itemType: newItemType, title: newItemTitle, content: JSON.stringify({ url: newItemUrl, body: newItemContent }), imageUrl: newItemImageFilename || null, folderKey: currentFolderKey });
+      await invoke("create_item", { id: crypto.randomUUID(), folderId: currentFolderId, itemType: newItemType, title: newItemTitle, content: JSON.stringify({ url: newItemUrl, body: newItemContent }), imageUrl: newItemImageFilename || null, folderKey: currentFolderKey, rootFolderId: rootLockedFolderId });
       setShowNewItemModal(false); setNewItemTitle(""); setNewItemUrl(""); setNewItemContent(""); setNewItemImageFilename(""); loadData();
-    } catch (e) { alert("Failed to create item: " + e); }
+      setToast({ message: "Item created", type: 'success' });
+    } catch (e) { setToast({ message: "Failed to create item: " + e, type: 'error' }); }
+    finally { setIsBusy(false); }
   };
 
   // Open item in detail window pinned to the right of main
@@ -197,7 +267,7 @@ export default function App() {
 
       const existing = await WebviewWindow.getByLabel("detail");
       if (existing) {
-        await existing.emit("show-item", { ...item, folderKey: currentFolderKey });
+        await existing.emit("show-item", { ...item, folderKey: currentFolderKey, rootFolderId: rootLockedFolderId });
         await existing.setFocus();
         return;
       }
@@ -214,7 +284,7 @@ export default function App() {
 
       detailWindow.once("tauri://created", () => {
         setTimeout(async () => {
-          try { await detailWindow.emit("show-item", { ...item, folderKey: currentFolderKey }); }
+          try { await detailWindow.emit("show-item", { ...item, folderKey: currentFolderKey, rootFolderId: rootLockedFolderId }); }
           catch (e) { console.error("Failed to emit:", e); }
         }, 500);
       });
@@ -234,7 +304,9 @@ export default function App() {
     try {
       const results = await invoke<SearchResultItem[]>("search_items", {
         query: searchQuery,
-        folderKey: currentFolderKey || Array(32).fill(0)
+        currentFolderId: currentFolderId,
+        currentFolderKey: currentFolderKey || Array(32).fill(0),
+        rootFolderId: rootLockedFolderId
       });
       setSearchResults(results);
     } catch (e) {
@@ -264,6 +336,8 @@ export default function App() {
   }, [items, sortBy]);
 
   const handleEditFolder = async () => {
+    if (isBusy) return;
+    setIsBusy(true);
     try {
       if (!currentFolderId) return;
       const currentKey = currentFolderKey || Array(32).fill(0);
@@ -291,7 +365,9 @@ export default function App() {
         newPath[newPath.length - 1].name = newFolderName;
         return newPath;
       });
-    } catch (e) { alert("Failed to edit folder: " + e); }
+      setToast({ message: "Folder updated", type: 'success' });
+    } catch (e) { setToast({ message: "Failed to edit folder: " + e, type: 'error' }); }
+    finally { setIsBusy(false); }
   };
 
   const handleDrop = async (e: React.DragEvent, targetId: string, targetType: 'folder' | 'item') => {
@@ -324,13 +400,55 @@ export default function App() {
     const newOrderIndex = (prevIndex + nextIndex) / 2.0;
 
     try {
-      await invoke('update_order_index', { id: draggedId, itemType: draggedType, orderIndex: newOrderIndex });
+      await invoke('update_order_index', { id: draggedId, itemType: draggedType, orderIndex: newOrderIndex, rootFolderId: rootLockedFolderId, folderKey: currentFolderKey });
       loadData();
     } catch (err) { alert("Failed to reorder: " + err); }
   };
 
   return (
     <div className="min-h-screen bg-slate-950 text-neutral-100 flex flex-col font-sans selection:bg-indigo-500/30 relative overflow-hidden">
+      {/* Loading overlay — pointer-events:none so window stays draggable */}
+      {loadingMessage && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999, pointerEvents: 'none',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(2, 6, 23, 0.85)', backdropFilter: 'blur(6px)',
+        }}>
+          <style>{`
+            @keyframes lynqor-spin { to { transform: rotate(360deg); } }
+            @keyframes lynqor-pulse { 0%,100% { opacity: .6; } 50% { opacity: 1; } }
+            @keyframes lynqor-toast-in { from { opacity:0; transform:translateY(16px) scale(.95); } to { opacity:1; transform:translateY(0) scale(1); } }
+            @keyframes lynqor-toast-out { from { opacity:1; } to { opacity:0; transform:translateY(-8px); } }
+          `}</style>
+          <div style={{
+            width: 56, height: 56, borderRadius: '50%',
+            border: '3px solid rgba(129, 140, 248, 0.2)',
+            borderTopColor: '#818cf8',
+            animation: 'lynqor-spin 0.8s linear infinite',
+            marginBottom: 20,
+          }} />
+          <p style={{
+            color: '#c7d2fe', fontSize: 16, fontWeight: 500, letterSpacing: '0.02em',
+            animation: 'lynqor-pulse 1.5s ease-in-out infinite',
+          }}>{loadingMessage}</p>
+        </div>
+      )}
+      {/* Toast notification */}
+      {toast && (
+        <div style={{
+          position: 'fixed', top: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 10000,
+          padding: '10px 24px', borderRadius: 12,
+          background: toast.type === 'success' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+          border: `1px solid ${toast.type === 'success' ? 'rgba(34, 197, 94, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
+          backdropFilter: 'blur(12px)',
+          color: toast.type === 'success' ? '#86efac' : '#fca5a5',
+          fontSize: 14, fontWeight: 500, letterSpacing: '0.01em',
+          animation: 'lynqor-toast-in 0.3s ease-out',
+          boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
+        }}>
+          {toast.type === 'success' ? '✓ ' : '✕ '}{toast.message}
+        </div>
+      )}
       <div className="fixed inset-0 pointer-events-none z-0">
         <div className="absolute -top-40 -left-20 w-[600px] h-[600px] bg-indigo-600/20 rounded-full blur-[120px] mix-blend-screen opacity-60" />
         <div className="absolute top-1/2 -right-40 w-[500px] h-[500px] bg-violet-600/20 rounded-full blur-[120px] mix-blend-screen opacity-50" />

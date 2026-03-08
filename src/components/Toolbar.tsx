@@ -1,8 +1,17 @@
-import { Search, LayoutGrid, List as ListIcon, Plus, Folder as FolderIcon, FileText } from "lucide-react";
+import { useState } from "react";
+import { Search, LayoutGrid, List as ListIcon, Plus, Folder as FolderIcon, FileText, ArrowUpDown } from "lucide-react";
 import { cn } from "../utils";
 import { ItemType } from "../types";
 
 type SortOption = 'manual' | 'a-z' | 'z-a' | 'latest_edit' | 'latest_create';
+
+const SORT_LABELS: Record<SortOption, string> = {
+    manual: 'Manual Order',
+    'a-z': 'A → Z',
+    'z-a': 'Z → A',
+    latest_edit: 'Last Edited',
+    latest_create: 'Date Created',
+};
 
 interface ToolbarProps {
     searchQuery: string;
@@ -31,6 +40,8 @@ export function Toolbar({
     onNewFolder,
     onNewNote
 }: ToolbarProps) {
+    const [isSortOpen, setIsSortOpen] = useState(false);
+
     return (
         <>
             <div className="relative z-10 w-1/3 flex justify-center">
@@ -48,17 +59,44 @@ export function Toolbar({
             </div>
 
             <div className="flex items-center justify-end gap-3 relative z-10 w-1/3">
-                <select
-                    value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value as SortOption)}
-                    className="bg-black/20 border border-white/10 rounded-lg text-white/70 text-sm px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 appearance-none"
-                >
-                    <option value="manual">Manual Order</option>
-                    <option value="a-z">A to Z</option>
-                    <option value="z-a">Z to A</option>
-                    <option value="latest_edit">Last Edited</option>
-                    <option value="latest_create">Date Created</option>
-                </select>
+                {/* Sort dropdown */}
+                <div className="relative">
+                    <button
+                        onClick={() => setIsSortOpen(!isSortOpen)}
+                        className={cn(
+                            "p-2 rounded-lg transition-all border",
+                            isSortOpen
+                                ? "bg-white/10 text-white border-white/15 shadow-lg"
+                                : "bg-black/20 text-white/50 border-white/10 hover:text-white hover:bg-white/5"
+                        )}
+                        title={`Sort: ${SORT_LABELS[sortBy]}`}
+                    >
+                        <ArrowUpDown size={16} />
+                    </button>
+
+                    {isSortOpen && (
+                        <>
+                            <div className="fixed inset-0 z-40" onClick={() => setIsSortOpen(false)} />
+                            <div className="absolute right-0 mt-2 w-48 bg-slate-900/80 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden z-50 py-1 ring-1 ring-black/50">
+                                {(Object.entries(SORT_LABELS) as [SortOption, string][]).map(([key, label]) => (
+                                    <button
+                                        key={key}
+                                        onClick={() => { setSortBy(key); setIsSortOpen(false); }}
+                                        className={cn(
+                                            "w-full text-left px-4 py-2.5 flex items-center gap-2 text-sm font-medium transition-colors",
+                                            sortBy === key
+                                                ? "text-indigo-300 bg-indigo-500/10"
+                                                : "text-neutral-300 hover:bg-white/10"
+                                        )}
+                                    >
+                                        {sortBy === key && <span className="text-indigo-400">✓</span>}
+                                        <span className={sortBy === key ? "" : "ml-5"}>{label}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </>
+                    )}
+                </div>
 
                 <div className="flex items-center bg-white/5 rounded-lg p-1 border border-white/5 shadow-inner">
                     <button

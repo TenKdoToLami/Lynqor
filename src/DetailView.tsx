@@ -49,7 +49,7 @@ const MarkdownImage = ({ src, alt }: { src?: string, alt?: string }) => {
 };
 
 export default function DetailView() {
-    const [item, setItem] = useState<(Item & { folderKey?: number[] | null }) | null>(null);
+    const [item, setItem] = useState<(Item & { folderKey?: number[] | null, rootFolderId?: string | null }) | null>(null);
     const [isEditing, setIsEditing] = useState(false);
     const [editTitle, setEditTitle] = useState("");
     const [editUrl, setEditUrl] = useState("");
@@ -60,7 +60,7 @@ export default function DetailView() {
 
     // Listen for item data from main window
     useEffect(() => {
-        const unlisten = listen<Item & { folderKey?: number[] | null }>("show-item", (event) => {
+        const unlisten = listen<Item & { folderKey?: number[] | null, rootFolderId?: string | null }>("show-item", (event) => {
             setItem(event.payload);
             setIsEditing(false);
         });
@@ -119,7 +119,8 @@ export default function DetailView() {
                 title: editTitle,
                 content: JSON.stringify({ url: editUrl, body: editContent }),
                 imageUrl: editImageFilename || null,
-                folderKey: item.folderKey
+                folderKey: item.folderKey,
+                rootFolderId: item.rootFolderId || null
             });
             // Update local state
             setItem({
@@ -146,7 +147,7 @@ export default function DetailView() {
                 kind: "warning",
             });
             if (confirmed) {
-                await invoke("delete_item", { id: item.id });
+                await invoke("delete_item", { id: item.id, rootFolderId: item.rootFolderId || null, folderKey: item.folderKey });
                 const { Window } = await import("@tauri-apps/api/window");
                 const mainWindow = await Window.getByLabel("main");
                 if (mainWindow) await mainWindow.emit("refresh-data", {});

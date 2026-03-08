@@ -29,6 +29,7 @@ pub fn init_db(app_handle: &tauri::AppHandle) -> Result<Connection, String> {
             is_locked INTEGER DEFAULT 0,
             password_salt TEXT,
             image_url TEXT,
+            migrated_to_blob INTEGER DEFAULT 0,
             order_index REAL DEFAULT 0.0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -59,6 +60,17 @@ pub fn init_db(app_handle: &tauri::AppHandle) -> Result<Connection, String> {
         "CREATE TABLE IF NOT EXISTS images (
             id TEXT PRIMARY KEY,
             data BLOB NOT NULL
+        )",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS encrypted_blobs (
+            id TEXT PRIMARY KEY,
+            data BLOB NOT NULL,
+            root_folder_id TEXT,
+            FOREIGN KEY(root_folder_id) REFERENCES folders(id) ON DELETE CASCADE
         )",
         [],
     )
@@ -138,6 +150,15 @@ pub fn init_db(app_handle: &tauri::AppHandle) -> Result<Connection, String> {
     if !folders_sql_for_new_cols.contains("image_url TEXT") {
         conn.execute("ALTER TABLE folders ADD COLUMN image_url TEXT", [])
             .map_err(|e| e.to_string())?;
+    }
+
+    // Migration: add migrated_to_blob to folders if missing
+    if !folders_sql_for_new_cols.contains("migrated_to_blob INTEGER") {
+        conn.execute(
+            "ALTER TABLE folders ADD COLUMN migrated_to_blob INTEGER DEFAULT 0",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     // Migration: add order_index and updated_at to folders
