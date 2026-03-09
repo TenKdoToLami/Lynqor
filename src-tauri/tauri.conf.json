@@ -15,7 +15,9 @@
         "label": "main",
         "title": "Lynqor",
         "width": 1000,
-        "height": 700
+        "height": 700,
+        "visible": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {

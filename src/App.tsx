@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -66,6 +66,8 @@ export default function App() {
   const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [dragState, setDragState] = useState<{ dragId: string | null; dragType: 'folder' | 'item' | null; dropTargetId: string | null; dropPosition: 'before' | 'after' | null }>({ dragId: null, dragType: null, dropTargetId: null, dropPosition: null });
+  const dragRef = useRef<{ dragId: string | null; dragType: 'folder' | 'item' | null }>({ dragId: null, dragType: null });
 
   // Auto-dismiss toast after 2.5s
   useEffect(() => {
@@ -137,7 +139,7 @@ export default function App() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Persist window size & position
+  // Persist window size & position — restore first, then show (window starts hidden)
   useEffect(() => {
     const mainWindow = getCurrentWindow();
     let saveTimer: ReturnType<typeof setTimeout>;
@@ -151,16 +153,18 @@ export default function App() {
         } catch { /* ignore */ }
       }, 500);
     };
-    // Restore on mount
+    // Restore on mount, then show the window
     (async () => {
       try {
         const saved = localStorage.getItem('lynqor_window');
         if (saved) {
           const { x, y, w, h } = JSON.parse(saved);
-          await mainWindow.setPosition(new PhysicalPosition(x, y));
           await mainWindow.setSize(new PhysicalSize(w, h));
+          await mainWindow.setPosition(new PhysicalPosition(x, y));
         }
       } catch { /* ignore */ }
+      // Show window after restoring (it starts hidden via tauri.conf.json)
+      try { await mainWindow.show(); } catch { /* ignore */ }
     })();
     const unlisteners: (() => void)[] = [];
     mainWindow.onMoved(() => save()).then(u => unlisteners.push(u));
@@ -365,25 +369,6 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [searchQuery, handleSearch]);
 
-  const getSortedFolders = useCallback(() => {
-    let sorted = [...folders];
-    if (sortBy === 'a-z') sorted.sort((a, b) => a.name.localeCompare(b.name));
-    if (sortBy === 'z-a') sorted.sort((a, b) => b.name.localeCompare(a.name));
-    if (sortBy === 'latest_edit') sorted.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
-    if (sortBy === 'latest_create') sorted.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-    if (sortBy === 'manual') sorted.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
-    return sorted;
-  }, [folders, sortBy]);
-
-  const getSortedItems = useCallback(() => {
-    let sorted = [...items];
-    if (sortBy === 'a-z') sorted.sort((a, b) => a.title.localeCompare(b.title));
-    if (sortBy === 'z-a') sorted.sort((a, b) => b.title.localeCompare(a.title));
-    if (sortBy === 'latest_edit') sorted.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
-    if (sortBy === 'latest_create') sorted.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-    if (sortBy === 'manual') sorted.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
-    return sorted;
-  }, [items, sortBy]);
 
   const handleEditFolder = async () => {
     if (isBusy) return;
@@ -420,31 +405,82 @@ export default function App() {
     finally { setIsBusy(false); }
   };
 
-  const handleDrop = async (e: React.DragEvent, targetId: string, targetType: 'folder' | 'item') => {
+  const onItemDragStart = (e: React.DragEvent, id: string, type: 'folder' | 'item') => {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', JSON.stringify({ id, type }));
+    // Set ref immediately (synchronous) so dragover handlers can read it
+    dragRef.current = { dragId: id, dragType: type };
+    setDragState({ dragId: id, dragType: type, dropTargetId: null, dropPosition: null });
+  };
+
+  const onItemDragOver = (e: React.DragEvent, targetId: string, _targetType: 'folder' | 'item') => {
     e.preventDefault();
-    if (sortBy !== 'manual') return;
+    e.dataTransfer.dropEffect = 'move';
+    const { dragId } = dragRef.current;
+    if (sortBy !== 'manual' || !dragId || dragId === targetId) return;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const pos: 'before' | 'after' = viewMode === 'list'
+      ? (e.clientY < rect.top + rect.height / 2 ? 'before' : 'after')
+      : (e.clientX < rect.left + rect.width / 2 ? 'before' : 'after');
+    setDragState(s => {
+      if (s.dropTargetId === targetId && s.dropPosition === pos) return s;
+      return { ...s, dropTargetId: targetId, dropPosition: pos };
+    });
+  };
+
+  const onItemDragLeave = (e: React.DragEvent) => {
+    // Only clear if actually leaving the element (not entering a child)
+    const related = e.relatedTarget as Node | null;
+    if (related && (e.currentTarget as HTMLElement).contains(related)) return;
+    setDragState(s => ({ ...s, dropTargetId: null, dropPosition: null }));
+  };
+
+  const onItemDragEnd = () => {
+    dragRef.current = { dragId: null, dragType: null };
+    setDragState({ dragId: null, dragType: null, dropTargetId: null, dropPosition: null });
+  };
+
+  // Unified list for cross-type ordering
+  type UnifiedEntry = { id: string; orderIndex: number; kind: 'folder' | 'item'; folder?: Folder; item?: Item };
+  const getUnifiedSorted = useCallback((): UnifiedEntry[] => {
+    const entries: UnifiedEntry[] = [
+      ...folders.map(f => ({ id: f.id, orderIndex: f.orderIndex || 0, kind: 'folder' as const, folder: f })),
+      ...items.map(i => ({ id: i.id, orderIndex: i.orderIndex || 0, kind: 'item' as const, item: i })),
+    ];
+    if (sortBy === 'manual') entries.sort((a, b) => a.orderIndex - b.orderIndex);
+    else if (sortBy === 'a-z') entries.sort((a, b) => ((a.folder?.name || a.item?.title || '')).localeCompare(b.folder?.name || b.item?.title || ''));
+    else if (sortBy === 'z-a') entries.sort((a, b) => ((b.folder?.name || b.item?.title || '')).localeCompare(a.folder?.name || a.item?.title || ''));
+    else if (sortBy === 'latest_edit') entries.sort((a, b) => new Date(b.folder?.updatedAt || b.item?.updatedAt || 0).getTime() - new Date(a.folder?.updatedAt || a.item?.updatedAt || 0).getTime());
+    else if (sortBy === 'latest_create') entries.sort((a, b) => new Date(b.folder?.createdAt || b.item?.createdAt || 0).getTime() - new Date(a.folder?.createdAt || a.item?.createdAt || 0).getTime());
+    return entries;
+  }, [folders, items, sortBy]);
+
+  const handleDrop = async (e: React.DragEvent, targetId: string, _targetType: 'folder' | 'item') => {
+    e.preventDefault();
+    if (sortBy !== 'manual') { onItemDragEnd(); return; }
 
     const draggedData = JSON.parse(e.dataTransfer.getData('text/plain') || '{}');
     const { id: draggedId, type: draggedType } = draggedData;
 
-    if (!draggedId || draggedId === targetId || draggedType !== targetType) return;
+    if (!draggedId || draggedId === targetId) { onItemDragEnd(); return; }
 
-    let list = draggedType === 'folder' ? getSortedFolders() : getSortedItems();
+    // Use unified list for position calculation
+    const list = getUnifiedSorted();
     const targetIdx = list.findIndex(x => x.id === targetId);
-    if (targetIdx === -1) return;
+    if (targetIdx === -1) { onItemDragEnd(); return; }
 
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const isBefore = viewMode === 'list' ? (e.clientY < rect.top + rect.height / 2) : (e.clientX < rect.left + rect.width / 2);
 
-    let prevIndex = 0;
-    let nextIndex = 0;
+    let prevIndex: number;
+    let nextIndex: number;
 
     if (isBefore) {
-      prevIndex = targetIdx > 0 ? (list[targetIdx - 1].orderIndex || 0) : (list[targetIdx].orderIndex || 0) - 1;
-      nextIndex = list[targetIdx].orderIndex || 0;
+      prevIndex = targetIdx > 0 ? list[targetIdx - 1].orderIndex : list[targetIdx].orderIndex - 1;
+      nextIndex = list[targetIdx].orderIndex;
     } else {
-      prevIndex = list[targetIdx].orderIndex || 0;
-      nextIndex = targetIdx < list.length - 1 ? (list[targetIdx + 1].orderIndex || 0) : (list[targetIdx].orderIndex || 0) + 1;
+      prevIndex = list[targetIdx].orderIndex;
+      nextIndex = targetIdx < list.length - 1 ? list[targetIdx + 1].orderIndex : list[targetIdx].orderIndex + 1;
     }
 
     const newOrderIndex = (prevIndex + nextIndex) / 2.0;
@@ -452,7 +488,9 @@ export default function App() {
     try {
       await invoke('update_order_index', { id: draggedId, itemType: draggedType, orderIndex: newOrderIndex, rootFolderId: rootLockedFolderId, folderKey: currentFolderKey });
       loadData();
-    } catch (err) { alert("Failed to reorder: " + err); }
+      setToast({ message: 'Reordered', type: 'success' });
+    } catch (err) { setToast({ message: 'Failed to reorder: ' + err, type: 'error' }); }
+    finally { onItemDragEnd(); }
   };
 
   return (
@@ -572,8 +610,11 @@ export default function App() {
                     onClick={() => handleFolderClick(res as any)}
                     onDelete={() => { }}
                     draggable={false}
+                    isDragging={false}
+                    dropPosition={null}
                     onDragStart={() => { }}
                     onDragOver={() => { }}
+                    onDragLeave={(_e) => { }}
                     onDrop={() => { }}
                   />
                 ) : (
@@ -585,8 +626,11 @@ export default function App() {
                     onClick={() => openItemDetail(res as any)}
                     onOpenLink={openLink}
                     draggable={false}
+                    isDragging={false}
+                    dropPosition={null}
                     onDragStart={() => { }}
                     onDragOver={() => { }}
+                    onDragLeave={(_e) => { }}
                     onDrop={() => { }}
                   />
                 )
@@ -601,34 +645,40 @@ export default function App() {
           </div>
         ) : (
           <div className={cn("max-w-7xl mx-auto grid gap-6", viewMode === 'grid' ? "grid-cols-[repeat(auto-fill,minmax(200px,1fr))]" : "grid-cols-1")}>
-            {getSortedFolders().map(folder => (
-              <FolderItem
-                key={folder.id}
-                folder={folder}
-                viewMode={viewMode}
-                imgSrc={getImageSrc(folder.imageUrl)}
-                onClick={() => handleFolderClick(folder)}
-                onDelete={() => handleDeleteFolder(folder.id)}
-                draggable={sortBy === 'manual'}
-                onDragStart={(e) => e.dataTransfer.setData("text/plain", JSON.stringify({ id: folder.id, type: 'folder' }))}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => handleDrop(e, folder.id, 'folder')}
-              />
-            ))}
-
-            {getSortedItems().map(item => (
-              <NoteItem
-                key={item.id}
-                item={item}
-                viewMode={viewMode}
-                imgSrc={getImageSrc(item.imageUrl)}
-                onClick={() => openItemDetail(item)}
-                onOpenLink={openLink}
-                draggable={sortBy === 'manual'}
-                onDragStart={(e) => e.dataTransfer.setData("text/plain", JSON.stringify({ id: item.id, type: 'item' }))}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => handleDrop(e, item.id, 'item')}
-              />
+            {getUnifiedSorted().map(entry => (
+              entry.kind === 'folder' && entry.folder ? (
+                <FolderItem
+                  key={entry.id}
+                  folder={entry.folder}
+                  viewMode={viewMode}
+                  imgSrc={getImageSrc(entry.folder.imageUrl)}
+                  onClick={() => handleFolderClick(entry.folder!)}
+                  onDelete={() => handleDeleteFolder(entry.folder!.id)}
+                  draggable={sortBy === 'manual'}
+                  isDragging={dragState.dragId === entry.id}
+                  dropPosition={dragState.dropTargetId === entry.id ? dragState.dropPosition : null}
+                  onDragStart={(e) => onItemDragStart(e, entry.id, 'folder')}
+                  onDragOver={(e) => onItemDragOver(e, entry.id, 'folder')}
+                  onDragLeave={onItemDragLeave}
+                  onDrop={(e) => handleDrop(e, entry.id, 'folder')}
+                />
+              ) : entry.kind === 'item' && entry.item ? (
+                <NoteItem
+                  key={entry.id}
+                  item={entry.item}
+                  viewMode={viewMode}
+                  imgSrc={getImageSrc(entry.item.imageUrl)}
+                  onClick={() => openItemDetail(entry.item!)}
+                  onOpenLink={openLink}
+                  draggable={sortBy === 'manual'}
+                  isDragging={dragState.dragId === entry.id}
+                  dropPosition={dragState.dropTargetId === entry.id ? dragState.dropPosition : null}
+                  onDragStart={(e) => onItemDragStart(e, entry.id, 'item')}
+                  onDragOver={(e) => onItemDragOver(e, entry.id, 'item')}
+                  onDragLeave={onItemDragLeave}
+                  onDrop={(e) => handleDrop(e, entry.id, 'item')}
+                />
+              ) : null
             ))}
           </div>
         )}

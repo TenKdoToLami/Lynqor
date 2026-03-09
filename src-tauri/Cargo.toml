@@ -30,3 +30,19 @@ rand = "0.8.5"
 tauri-plugin-dialog = "2"
 base64 = "0.22.1"
 chrono = "0.4"
+
+# Optimize crypto crates even in debug builds — Argon2/AES are 10-50x slower without this
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.aes-gcm]
+opt-level = 3
+
+[profile.dev.package.aes]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
+[profile.dev.package.base64]
+opt-level = 3
