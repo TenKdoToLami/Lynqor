@@ -14,15 +14,11 @@ import {
     Copy,
     Check,
     ImagePlus,
-    Bold,
-    Italic,
-    Heading,
-    Code,
-    Link as LinkIcon,
     QrCode,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import MDEditor from '@uiw/react-md-editor';
 import { ConfirmDeleteModal } from "./components/Modals/ConfirmDeleteModal";
 
 function parseItemContent(content: string): { url: string; body: string } {
@@ -194,6 +190,45 @@ export default function DetailView() {
                 <div className="absolute -bottom-40 -left-20 w-[400px] h-[400px] bg-indigo-600/15 rounded-full blur-[100px] mix-blend-screen opacity-40" />
             </div>
 
+            {/* Global style overrides for MDEditor to match Lynqor theme */}
+            <style>{`
+                .wmde-markdown, .w-md-editor {
+                    background-color: transparent !important;
+                    color: #f1f5f9 !important;
+                    border: none !important;
+                    box-shadow: none !important;
+                }
+                .w-md-editor-toolbar {
+                    background-color: rgba(0, 0, 0, 0.4) !important;
+                    border-bottom: 1px solid rgba(245, 158, 11, 0.2) !important;
+                    border-radius: 1rem 1rem 0 0 !important;
+                }
+                .w-md-editor-toolbar li > button {
+                    color: rgba(254, 243, 199, 0.6) !important;
+                }
+                .w-md-editor-toolbar li > button:hover {
+                    color: rgba(253, 230, 138, 1) !important;
+                    background-color: rgba(245, 158, 11, 0.2) !important;
+                }
+                .w-md-editor-toolbar li.active > button {
+                    color: rgba(253, 230, 138, 1) !important;
+                    background-color: rgba(245, 158, 11, 0.3) !important;
+                }
+                .w-md-editor-content {
+                    background-color: rgba(0, 0, 0, 0.2) !important;
+                    border-radius: 0 0 1rem 1rem !important;
+                }
+                .w-md-editor-text-pre > code, .w-md-editor-text-input {
+                    color: #f1f5f9 !important;
+                    font-size: 14px !important;
+                    line-height: 1.6 !important;
+                }
+                /* Focus ring */
+                .w-md-editor.w-md-editor-focus {
+                    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.5) !important;
+                }
+            `}</style>
+
             {/* Header */}
             <header className="h-14 border-b border-white/5 bg-white/5 backdrop-blur-xl flex items-center justify-between px-6 sticky top-0 z-10 relative shadow-sm">
                 <div data-tauri-drag-region className="absolute inset-0 w-full h-full cursor-default" />
@@ -279,42 +314,15 @@ export default function DetailView() {
                         <div>
                             <label className="text-sm font-semibold text-amber-300/80 mb-2 block ml-1 flex justify-between">
                                 <span>Content</span>
-                                <span className="text-xs font-normal text-white/30">Markdown Supported</span>
+                                <span className="text-xs font-normal text-white/30">WYSIWYG Markdown Editor</span>
                             </label>
-                            <div className="bg-black/20 border border-amber-500/30 rounded-2xl overflow-hidden shadow-inner focus-within:ring-2 focus-within:ring-amber-500/50 transition-all">
-                                <div className="flex items-center gap-1 bg-black/40 px-3 py-2 border-b border-amber-500/20">
-                                    <button type="button" onClick={() => {
-                                        const txt = document.getElementById('edit-item-content') as HTMLTextAreaElement;
-                                        if (!txt) return;
-                                        const start = txt.selectionStart; const end = txt.selectionEnd;
-                                        setEditContent(prev => prev.substring(0, start) + "**" + prev.substring(start, end) + "**" + prev.substring(end));
-                                    }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Bold"><Bold size={16} /></button>
-                                    <button type="button" onClick={() => {
-                                        const txt = document.getElementById('edit-item-content') as HTMLTextAreaElement;
-                                        if (!txt) return;
-                                        const start = txt.selectionStart; const end = txt.selectionEnd;
-                                        setEditContent(prev => prev.substring(0, start) + "*" + prev.substring(start, end) + "*" + prev.substring(end));
-                                    }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Italic"><Italic size={16} /></button>
-                                    <button type="button" onClick={() => {
-                                        const txt = document.getElementById('edit-item-content') as HTMLTextAreaElement;
-                                        if (!txt) return;
-                                        const start = txt.selectionStart;
-                                        setEditContent(prev => prev.substring(0, start) + "\n### " + prev.substring(start));
-                                    }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Heading"><Heading size={16} /></button>
-                                    <button type="button" onClick={() => {
-                                        const txt = document.getElementById('edit-item-content') as HTMLTextAreaElement;
-                                        if (!txt) return;
-                                        const start = txt.selectionStart; const end = txt.selectionEnd;
-                                        setEditContent(prev => prev.substring(0, start) + "`" + prev.substring(start, end) + "`" + prev.substring(end));
-                                    }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Code"><Code size={16} /></button>
-                                    <button type="button" onClick={() => {
-                                        const txt = document.getElementById('edit-item-content') as HTMLTextAreaElement;
-                                        if (!txt) return;
-                                        const start = txt.selectionStart; const end = txt.selectionEnd;
-                                        setEditContent(prev => prev.substring(0, start) + "[" + prev.substring(start, end) + "](url)" + prev.substring(end));
-                                    }} className="p-1.5 rounded-lg text-amber-100/60 hover:text-amber-300 hover:bg-amber-500/20 transition-all" title="Link"><LinkIcon size={16} /></button>
-                                </div>
-                                <textarea id="edit-item-content" rows={16} value={editContent} onChange={e => setEditContent(e.target.value)}
+                            <div className="border border-amber-500/30 rounded-2xl overflow-hidden shadow-inner transition-all w-full" data-color-mode="dark">
+                                <MDEditor
+                                    value={editContent}
+                                    onChange={(val) => setEditContent(val || "")}
+                                    height={400}
+                                    visibleDragbar={false}
+                                    preview="live"
                                     onPaste={async (e) => {
                                         const items = e.clipboardData.items;
                                         for (let i = 0; i < items.length; i++) {
@@ -327,9 +335,7 @@ export default function DetailView() {
                                                     const base64Data = event.target?.result as string;
                                                     try {
                                                         const filename = await invoke<string>("save_base64_image", { base64Data });
-                                                        const txt = document.getElementById('edit-item-content') as HTMLTextAreaElement;
-                                                        const start = txt ? txt.selectionStart : editContent.length;
-                                                        setEditContent(prev => prev.substring(0, start) + `\n![pasted image](${filename})\n` + prev.substring(start));
+                                                        setEditContent(prev => prev + `\n![pasted image](${filename})\n`);
                                                     } catch (err) { alert("Failed to save pasted image: " + err); }
                                                 };
                                                 reader.readAsDataURL(file);
@@ -337,7 +343,7 @@ export default function DetailView() {
                                             }
                                         }
                                     }}
-                                    placeholder="Type your note here... (Paste images directly!)" className="w-full bg-transparent p-5 text-white placeholder-amber-900/50 focus:outline-none font-mono text-sm leading-relaxed resize-none" />
+                                />
                             </div>
                         </div>
                     </div>
@@ -398,7 +404,62 @@ export default function DetailView() {
                             <div className="prose prose-invert prose-indigo prose-base mx-auto w-full">
                                 <Markdown
                                     remarkPlugins={[remarkGfm]}
-                                    components={{ img: MarkdownImage }}
+                                    components={{
+                                        img: MarkdownImage,
+                                        input: ({ node, checked, ...props }) => {
+                                            if (props.type === "checkbox") {
+                                                const handleToggle = async () => {
+                                                    if (!node || !node.position) return;
+                                                    // AST line is 1-indexed. Let's split raw body into lines.
+                                                    const lines = body.split('\n');
+                                                    const lineIdx = node.position.start.line - 1;
+                                                    if (lineIdx >= 0 && lineIdx < lines.length) {
+                                                        const line = lines[lineIdx];
+                                                        // A markdown list checkbox looks like "- [ ] " or "* [x] ".
+                                                        // We just replace the first occurence of [ ] or [x] or [X] on that line.
+                                                        const regex = /\[([ xX])\]/;
+                                                        const match = line.match(regex);
+                                                        if (match) {
+                                                            const isCurrentlyChecked = match[1].trim().toLowerCase() === 'x';
+                                                            const newLine = line.replace(regex, isCurrentlyChecked ? '[ ]' : '[x]');
+                                                            lines[lineIdx] = newLine;
+                                                            const newBody = lines.join('\n');
+
+                                                            // Compute entire new content JSON
+                                                            const newContent = JSON.stringify({ url: url || "", body: newBody });
+                                                            try {
+                                                                await invoke("update_item_content", {
+                                                                    id: item.id,
+                                                                    content: newContent,
+                                                                    rootFolderId: item.rootFolderId || null,
+                                                                    folderKey: item.folderKey
+                                                                });
+
+                                                                // Refresh app data so it updates locally immediately
+                                                                const { Window } = await import("@tauri-apps/api/window");
+                                                                const mainWindow = await Window.getByLabel("main");
+                                                                if (mainWindow) {
+                                                                    await mainWindow.emit("refresh-data", {});
+                                                                }
+                                                                // Also update local view instantly (DetailView receives an event, or we can just hope it re-renders. Actually DetailView receives full item prop. It's better to tell main to refresh, then main tells DetailView to refresh. But for instant visual, we can't easily mutate props. So we wait for the emit to roundtrip. To make it feel fast, we can add a tiny toast).
+                                                            } catch (e) {
+                                                                console.error("Failed to toggle checkbox", e);
+                                                            }
+                                                        }
+                                                    }
+                                                };
+                                                return (
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={checked}
+                                                        className="h-4 w-4 rounded border-white/20 bg-black/40 text-indigo-500 focus:ring-indigo-500/50 cursor-pointer appearance-none checked:bg-indigo-500 checked:border-indigo-500 relative before:content-[''] checked:before:content-['✓'] before:absolute before:text-white before:text-xs before:left-0.5 before:-top-0.5"
+                                                        onChange={handleToggle}
+                                                    />
+                                                );
+                                            }
+                                            return <input {...props} />;
+                                        }
+                                    }}
                                 >
                                     {body}
                                 </Markdown>

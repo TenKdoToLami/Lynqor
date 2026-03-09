@@ -6,7 +6,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { Folder, Item, ItemType } from "./types";
-import { ArrowLeft, Search } from "lucide-react";
+import { ArrowLeft, Search, ImagePlus } from "lucide-react";
 import { cn } from "./utils";
 import { Breadcrumbs } from "./components/Breadcrumbs";
 import { Toolbar } from "./components/Toolbar";
@@ -67,7 +67,9 @@ export default function App() {
   const [isBusy, setIsBusy] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [dragState, setDragState] = useState<{ dragId: string | null; dragType: 'folder' | 'item' | null; dropTargetId: string | null; dropPosition: 'before' | 'after' | null }>({ dragId: null, dragType: null, dropTargetId: null, dropPosition: null });
+  const [isDraggingExternal, setIsDraggingExternal] = useState(false);
   const dragRef = useRef<{ dragId: string | null; dragType: 'folder' | 'item' | null }>({ dragId: null, dragType: null });
+  const dragCounter = useRef(0);
 
   // Auto-dismiss toast after 2.5s
   useEffect(() => {
@@ -493,8 +495,94 @@ export default function App() {
     finally { onItemDragEnd(); }
   };
 
+  const handleGlobalDragEnter = (e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes('Files')) {
+      e.preventDefault();
+      dragCounter.current++;
+      setIsDraggingExternal(true);
+    }
+  };
+
+  const handleGlobalDragLeave = (e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes('Files')) {
+      e.preventDefault();
+      dragCounter.current--;
+      if (dragCounter.current === 0) {
+        setIsDraggingExternal(false);
+      }
+    }
+  };
+
+  const handleGlobalDragOver = (e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes('Files')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  };
+
+  const handleGlobalDrop = async (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    dragCounter.current = 0;
+    setIsDraggingExternal(false);
+
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+    if (files.length === 0) return;
+
+    if (isBusy) return;
+    setIsBusy(true);
+
+    try {
+      for (const file of files) {
+        const reader = new FileReader();
+        const base64Data = await new Promise<string>((resolve, reject) => {
+          reader.onload = ev => resolve(ev.target?.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+        const filename = await invoke<string>("save_base64_image", { base64Data });
+        const content = JSON.stringify({ url: "", body: `![${file.name}](${filename})` });
+
+        await invoke("create_item", {
+          id: crypto.randomUUID(),
+          folderId: currentFolderId,
+          itemType: 'NOTE',
+          title: file.name.replace(/\.[^/.]+$/, ""), // file name without extension
+          content,
+          imageUrl: filename,
+          folderKey: currentFolderKey,
+          rootFolderId: rootLockedFolderId
+        });
+      }
+      loadData();
+      setToast({ message: `Imported ${files.length} image(s)`, type: 'success' });
+    } catch (err) {
+      setToast({ message: "Failed to import image: " + err, type: 'error' });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-slate-950 text-neutral-100 flex flex-col font-sans selection:bg-indigo-500/30 relative overflow-hidden">
+    <div
+      className="min-h-screen bg-slate-950 text-neutral-100 flex flex-col font-sans selection:bg-indigo-500/30 relative overflow-hidden"
+      onDragEnter={handleGlobalDragEnter}
+      onDragLeave={handleGlobalDragLeave}
+      onDragOver={handleGlobalDragOver}
+      onDrop={handleGlobalDrop}
+    >
+      {/* External Drag Overlay */}
+      {isDraggingExternal && (
+        <div className="absolute inset-0 z-50 bg-indigo-900/40 backdrop-blur-sm border-4 border-indigo-400 border-dashed rounded-xl m-4 flex flex-col items-center justify-center animate-in fade-in duration-200 pointer-events-none">
+          <div className="bg-slate-900 rounded-full p-6 shadow-2xl mb-4 text-indigo-400">
+            <ImagePlus size={48} />
+          </div>
+          <h2 className="text-3xl font-bold text-white tracking-tight">Drop image to create note</h2>
+          <p className="text-indigo-200/70 mt-2">The image will be encrypted and saved in the current folder</p>
+        </div>
+      )}
+
       {/* Loading overlay — pointer-events:none so window stays draggable */}
       {loadingMessage && (
         <div style={{
