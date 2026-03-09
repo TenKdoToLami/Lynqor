@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from "react";
-import { Search, LayoutGrid, List as ListIcon, Plus, Folder as FolderIcon, FileText, ArrowUpDown, X } from "lucide-react";
+import { useState } from "react";
+import { Search, LayoutGrid, List as ListIcon, Plus, Folder as FolderIcon, FileText, ArrowUpDown } from "lucide-react";
 import { cn } from "../utils";
 import { ItemType } from "../types";
 
@@ -14,9 +14,6 @@ const SORT_LABELS: Record<SortOption, string> = {
 };
 
 interface ToolbarProps {
-    searchQuery: string;
-    setSearchQuery: (query: string) => void;
-    onClearSearch: () => void;
     sortBy: SortOption;
     setSortBy: (sort: SortOption) => void;
     viewMode: 'grid' | 'list';
@@ -28,9 +25,6 @@ interface ToolbarProps {
 }
 
 export function Toolbar({
-    searchQuery,
-    setSearchQuery,
-    onClearSearch,
     sortBy,
     setSortBy,
     viewMode,
@@ -41,54 +35,22 @@ export function Toolbar({
     onNewNote
 }: ToolbarProps) {
     const [isSortOpen, setIsSortOpen] = useState(false);
-    const [isSearchFocused, setIsSearchFocused] = useState(false);
-    const searchRef = useRef<HTMLInputElement>(null);
-
-    const isSearchExpanded = isSearchFocused || searchQuery.length > 0;
-
-    useEffect(() => {
-        if (isSearchExpanded && searchRef.current) {
-            searchRef.current.focus();
-        }
-    }, [isSearchExpanded]);
 
     return (
         <div className="flex items-center justify-end gap-3 relative z-10 w-2/3">
-            {/* Search — expands leftward from the toolbar */}
-            <div className={cn(
-                "relative transition-all duration-300 ease-out",
-                isSearchExpanded ? "flex-1 max-w-md" : "w-auto"
-            )}>
-                {isSearchExpanded ? (
-                    <>
-                        <input
-                            ref={searchRef}
-                            type="text"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            onBlur={() => setIsSearchFocused(false)}
-                            placeholder="Search notes & folders..."
-                            className="w-full bg-black/20 border border-white/10 rounded-full pl-10 pr-9 py-2 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all shadow-inner"
-                        />
-                        <Search size={16} className="absolute left-3.5 top-2.5 text-white/40" />
-                        {searchQuery && (
-                            <button
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={onClearSearch}
-                                className="absolute right-3 top-2 p-0.5 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-colors"
-                            >
-                                <X size={14} />
-                            </button>
-                        )}
-                    </>
-                ) : (
-                    <button
-                        onClick={() => setIsSearchFocused(true)}
-                        className="p-2 rounded-lg bg-black/20 border border-white/10 text-white/50 hover:text-white hover:bg-white/5 transition-all"
-                    >
-                        <Search size={16} />
-                    </button>
-                )}
+            <div className="flex-1 w-auto max-w-sm ml-auto">
+                <button
+                    onClick={() => {
+                        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-2 bg-black/20 hover:bg-black/30 border border-white/10 rounded-full text-white/50 hover:text-white transition-all shadow-inner group"
+                >
+                    <Search size={16} className="text-white/40 group-hover:text-indigo-400 transition-colors" />
+                    <span className="flex-1 text-left text-sm font-medium">Search Lynqor...</span>
+                    <div className="flex items-center gap-1 text-[10px] font-bold bg-white/10 px-1.5 py-0.5 rounded text-white/40">
+                        <kbd>Ctrl</kbd> <kbd>K</kbd>
+                    </div>
+                </button>
             </div>
 
             {/* Sort dropdown */}

@@ -6,7 +6,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { Folder, Item, ItemType } from "./types";
-import { ArrowLeft, Search, ImagePlus } from "lucide-react";
+import { ImagePlus } from "lucide-react";
 import { cn } from "./utils";
 import { Breadcrumbs } from "./components/Breadcrumbs";
 import { Toolbar } from "./components/Toolbar";
@@ -18,17 +18,15 @@ import { EditFolderModal } from "./components/Modals/EditFolderModal";
 import { NewItemModal } from "./components/Modals/NewItemModal";
 import { ConfirmDeleteModal } from "./components/Modals/ConfirmDeleteModal";
 
+import { Sidebar } from "./components/Sidebar";
+import { CommandPalette } from "./components/CommandPalette";
+import { SettingsModal } from "./components/Modals/SettingsModal";
+import { InlineDetailView } from "./components/InlineDetailView";
+import { useSettings } from "./store/settings";
+import { Settings as SettingsIcon } from "lucide-react";
 type SortOption = 'manual' | 'a-z' | 'z-a' | 'latest_edit' | 'latest_create';
 
-type SearchResultItem = {
-  id: string;
-  isFolder: boolean;
-  name: string;
-  content?: string;
-  parentId?: string;
-  itemType?: string;
-  imageUrl?: string;
-};
+
 
 const DETAIL_WIDTH = 650;
 
@@ -40,9 +38,6 @@ export default function App() {
   const [folderPath, setFolderPath] = useState<Folder[]>([]);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sortBy, setSortBy] = useState<SortOption>('manual');
-
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResultItem[] | null>(null);
 
   const [isNewMenuOpen, setIsNewMenuOpen] = useState(false);
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
@@ -70,6 +65,13 @@ export default function App() {
   const [isDraggingExternal, setIsDraggingExternal] = useState(false);
   const dragRef = useRef<{ dragId: string | null; dragType: 'folder' | 'item' | null }>({ dragId: null, dragType: null });
   const dragCounter = useRef(0);
+
+  const { openInNewWindow, tileIconSize } = useSettings();
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+
+  const selectedItemFull = items.find(i => i.id === selectedItemId) || null;
 
   // Auto-dismiss toast after 2.5s
   useEffect(() => {
@@ -214,17 +216,19 @@ export default function App() {
     if (currentFolderId === null) { loadData(); return; }
     setFolders([]); setItems([]); setImagePaths({});
     setCurrentFolderId(null); setCurrentFolderKey(null); setFolderPath([]);
+    setSelectedItemId(null);
   };
   const navigateToBreadcrumb = (crumb: Folder, idx: number) => {
     if (currentFolderId === crumb.id) { loadData(); return; }
     setFolders([]); setItems([]); setImagePaths({});
     setCurrentFolderId(crumb.id); setFolderPath(folderPath.slice(0, idx + 1)); setCurrentFolderKey(null);
+    setSelectedItemId(null);
   };
 
   const handleFolderClick = (folder: Folder) => {
     if (folder.isLocked) setPasswordPrompt({ isOpen: true, targetFolderId: folder.id });
     else if (currentFolderId === folder.id) { loadData(); }
-    else { setFolders([]); setItems([]); setImagePaths({}); setCurrentFolderId(folder.id); setFolderPath([...folderPath, folder]); }
+    else { setFolders([]); setItems([]); setImagePaths({}); setCurrentFolderId(folder.id); setFolderPath([...folderPath, folder]); setSelectedItemId(null); }
   };
 
   const submitPassword = async () => {
@@ -310,6 +314,11 @@ export default function App() {
 
   // Open item in detail window pinned to the right of main
   const openItemDetail = async (item: Item) => {
+    if (!openInNewWindow) {
+      setSelectedItemId(item.id);
+      return;
+    }
+
     try {
       const mainWindow = getCurrentWindow();
       const mainPos = await mainWindow.outerPosition();
@@ -346,30 +355,7 @@ export default function App() {
   const openLink = async (url: string) => { try { await openUrl(url); } catch { window.open(url, '_blank'); } };
   const getImageSrc = (imageUrl: string | undefined) => imageUrl ? (imagePaths[imageUrl] || null) : null;
 
-  const handleSearch = useCallback(async (q: string) => {
-    if (!q.trim()) {
-      setSearchResults(null);
-      return;
-    }
-    try {
-      const results = await invoke<SearchResultItem[]>("search_items", {
-        query: q,
-        currentFolderId: currentFolderId,
-        currentFolderKey: currentFolderKey || Array(32).fill(0),
-        rootFolderId: rootLockedFolderId
-      });
-      setSearchResults(results);
-    } catch (e) {
-      setToast({ message: "Search failed: " + e, type: 'error' });
-      setSearchResults(null);
-    }
-  }, [currentFolderId, currentFolderKey, rootLockedFolderId]);
 
-  // Debounced search-as-you-type
-  useEffect(() => {
-    const timer = setTimeout(() => handleSearch(searchQuery), 300);
-    return () => clearTimeout(timer);
-  }, [searchQuery, handleSearch]);
 
 
   const handleEditFolder = async () => {
@@ -566,173 +552,153 @@ export default function App() {
 
   return (
     <div
-      className="min-h-screen bg-slate-950 text-neutral-100 flex flex-col font-sans selection:bg-indigo-500/30 relative overflow-hidden"
+      className="h-screen w-full flex bg-slate-950 text-neutral-100 font-sans selection:bg-indigo-500/30 overflow-hidden relative"
       onDragEnter={handleGlobalDragEnter}
       onDragLeave={handleGlobalDragLeave}
       onDragOver={handleGlobalDragOver}
       onDrop={handleGlobalDrop}
     >
-      {/* External Drag Overlay */}
-      {isDraggingExternal && (
-        <div className="absolute inset-0 z-50 bg-indigo-900/40 backdrop-blur-sm border-4 border-indigo-400 border-dashed rounded-xl m-4 flex flex-col items-center justify-center animate-in fade-in duration-200 pointer-events-none">
-          <div className="bg-slate-900 rounded-full p-6 shadow-2xl mb-4 text-indigo-400">
-            <ImagePlus size={48} />
-          </div>
-          <h2 className="text-3xl font-bold text-white tracking-tight">Drop image to create note</h2>
-          <p className="text-indigo-200/70 mt-2">The image will be encrypted and saved in the current folder</p>
-        </div>
-      )}
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        rootFolders={folders.filter(f => !f.parentId)}
+        currentFolderKey={currentFolderKey}
+        rootLockedFolderId={rootLockedFolderId}
+        onSelectResult={(item) => openItemDetail(item as any)}
+      />
 
-      {/* Loading overlay — pointer-events:none so window stays draggable */}
-      {loadingMessage && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 9999, pointerEvents: 'none',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(2, 6, 23, 0.85)', backdropFilter: 'blur(6px)',
-        }}>
-          <style>{`
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+      />
+
+      {/* Pane 1: Sidebar */}
+      <div className="hidden md:flex flex-col shrink-0 relative z-20 h-full border-r border-white/5 bg-slate-900/50 backdrop-blur-xl">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden">
+          <Sidebar
+            currentFolderId={currentFolderId}
+            onNavigate={(path, folderKey, _rootId) => {
+              if (path.length === 0) navigateToRoot();
+              else {
+                const target = path[path.length - 1];
+                setFolders([]); setItems([]); setImagePaths({});
+                setCurrentFolderId(target.id);
+                setFolderPath(path);
+                setCurrentFolderKey(folderKey);
+                setSelectedItemId(null);
+              }
+            }}
+            onRequestUnlock={(folder) => setPasswordPrompt({ isOpen: true, targetFolderId: folder.id })}
+          />
+        </div>
+        <div className="p-4 border-t border-white/5">
+          <button onClick={() => setIsSettingsOpen(true)} className="w-full px-3 py-2 text-white/50 hover:text-white hover:bg-white/10 rounded-lg transition-colors flex items-center justify-center gap-2">
+            <SettingsIcon size={18} />
+            <span className="text-sm font-medium">Settings</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Pane 2: Main Context (Middle) */}
+      <div className="flex-1 flex flex-col relative min-w-0 z-10 bg-slate-950 shadow-2xl">
+        {/* External Drag Overlay */}
+        {isDraggingExternal && (
+          <div className="absolute inset-0 z-50 bg-indigo-900/40 backdrop-blur-sm border-4 border-indigo-400 border-dashed rounded-xl m-4 flex flex-col items-center justify-center animate-in fade-in duration-200 pointer-events-none">
+            <div className="bg-slate-900 rounded-full p-6 shadow-2xl mb-4 text-indigo-400">
+              <ImagePlus size={48} />
+            </div>
+            <h2 className="text-3xl font-bold text-white tracking-tight">Drop image to create note</h2>
+            <p className="text-indigo-200/70 mt-2">The image will be encrypted and saved in the current folder</p>
+          </div>
+        )}
+
+        {/* Loading overlay — pointer-events:none so window stays draggable */}
+        {loadingMessage && (
+          <div style={{
+            position: 'fixed', inset: 0, zIndex: 9999, pointerEvents: 'none',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(2, 6, 23, 0.85)', backdropFilter: 'blur(6px)',
+          }}>
+            <style>{`
             @keyframes lynqor-spin { to { transform: rotate(360deg); } }
             @keyframes lynqor-pulse { 0%,100% { opacity: .6; } 50% { opacity: 1; } }
             @keyframes lynqor-toast-in { from { opacity:0; transform:translateY(16px) scale(.95); } to { opacity:1; transform:translateY(0) scale(1); } }
             @keyframes lynqor-toast-out { from { opacity:1; } to { opacity:0; transform:translateY(-8px); } }
           `}</style>
+            <div style={{
+              width: 56, height: 56, borderRadius: '50%',
+              border: '3px solid rgba(129, 140, 248, 0.2)',
+              borderTopColor: '#818cf8',
+              animation: 'lynqor-spin 0.8s linear infinite',
+              marginBottom: 20,
+            }} />
+            <p style={{
+              color: '#c7d2fe', fontSize: 16, fontWeight: 500, letterSpacing: '0.02em',
+              animation: 'lynqor-pulse 1.5s ease-in-out infinite',
+            }}>{loadingMessage}</p>
+          </div>
+        )}
+        {/* Toast notification */}
+        {toast && (
           <div style={{
-            width: 56, height: 56, borderRadius: '50%',
-            border: '3px solid rgba(129, 140, 248, 0.2)',
-            borderTopColor: '#818cf8',
-            animation: 'lynqor-spin 0.8s linear infinite',
-            marginBottom: 20,
-          }} />
-          <p style={{
-            color: '#c7d2fe', fontSize: 16, fontWeight: 500, letterSpacing: '0.02em',
-            animation: 'lynqor-pulse 1.5s ease-in-out infinite',
-          }}>{loadingMessage}</p>
+            position: 'fixed', top: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 10000,
+            padding: '10px 24px', borderRadius: 12,
+            background: toast.type === 'success' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+            border: `1px solid ${toast.type === 'success' ? 'rgba(34, 197, 94, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
+            backdropFilter: 'blur(12px)',
+            color: toast.type === 'success' ? '#86efac' : '#fca5a5',
+            fontSize: 14, fontWeight: 500, letterSpacing: '0.01em',
+            animation: 'lynqor-toast-in 0.3s ease-out',
+            boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
+          }}>
+            {toast.type === 'success' ? '✓ ' : '✕ '}{toast.message}
+          </div>
+        )}
+        <div className="fixed inset-0 pointer-events-none z-0">
+          <div className="absolute -top-40 -left-20 w-[600px] h-[600px] bg-indigo-600/20 rounded-full blur-[120px] mix-blend-screen opacity-60" />
+          <div className="absolute top-1/2 -right-40 w-[500px] h-[500px] bg-violet-600/20 rounded-full blur-[120px] mix-blend-screen opacity-50" />
+          <div className="absolute -bottom-40 left-1/4 w-[400px] h-[400px] bg-sky-600/20 rounded-full blur-[100px] mix-blend-screen opacity-40" />
         </div>
-      )}
-      {/* Toast notification */}
-      {toast && (
-        <div style={{
-          position: 'fixed', top: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 10000,
-          padding: '10px 24px', borderRadius: 12,
-          background: toast.type === 'success' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-          border: `1px solid ${toast.type === 'success' ? 'rgba(34, 197, 94, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
-          backdropFilter: 'blur(12px)',
-          color: toast.type === 'success' ? '#86efac' : '#fca5a5',
-          fontSize: 14, fontWeight: 500, letterSpacing: '0.01em',
-          animation: 'lynqor-toast-in 0.3s ease-out',
-          boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
-        }}>
-          {toast.type === 'success' ? '✓ ' : '✕ '}{toast.message}
-        </div>
-      )}
-      <div className="fixed inset-0 pointer-events-none z-0">
-        <div className="absolute -top-40 -left-20 w-[600px] h-[600px] bg-indigo-600/20 rounded-full blur-[120px] mix-blend-screen opacity-60" />
-        <div className="absolute top-1/2 -right-40 w-[500px] h-[500px] bg-violet-600/20 rounded-full blur-[120px] mix-blend-screen opacity-50" />
-        <div className="absolute -bottom-40 left-1/4 w-[400px] h-[400px] bg-sky-600/20 rounded-full blur-[100px] mix-blend-screen opacity-40" />
-      </div>
 
-      <header className="p-6 pb-2 border-b border-white/5 relative z-20">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex items-center justify-between gap-6 mb-6">
-            <div className="w-1/3">
-              <Breadcrumbs
-                currentFolderId={currentFolderId}
-                folderPath={folderPath}
-                navigateToRoot={navigateToRoot}
-                navigateToBreadcrumb={navigateToBreadcrumb}
-                onEditFolder={() => {
-                  const target = folderPath[folderPath.length - 1];
-                  setNewFolderName(target.name);
-                  setNewFolderDescription(target.description || "");
-                  setNewFolderImageFilename(target.imageUrl || "");
-                  setNewFolderEncrypt(target.isLocked);
-                  setShowEditFolderModal(true);
-                }}
+        <header className="p-6 pb-2 border-b border-white/5 relative z-20">
+          <div className="max-w-7xl mx-auto">
+            <div className="flex items-center justify-between gap-6 mb-6">
+              <div className="w-1/3">
+                <Breadcrumbs
+                  currentFolderId={currentFolderId}
+                  folderPath={folderPath}
+                  navigateToRoot={navigateToRoot}
+                  navigateToBreadcrumb={navigateToBreadcrumb}
+                  onEditFolder={() => {
+                    const target = folderPath[folderPath.length - 1];
+                    setNewFolderName(target.name);
+                    setNewFolderDescription(target.description || "");
+                    setNewFolderImageFilename(target.imageUrl || "");
+                    setNewFolderEncrypt(target.isLocked);
+                    setShowEditFolderModal(true);
+                  }}
+                />
+              </div>
+
+              <Toolbar
+                sortBy={sortBy}
+                setSortBy={setSortBy}
+                viewMode={viewMode}
+                setViewMode={setViewMode}
+                isNewMenuOpen={isNewMenuOpen}
+                setIsNewMenuOpen={setIsNewMenuOpen}
+                onNewFolder={() => setShowNewFolderModal(true)}
+                onNewNote={(type) => { setNewItemType(type); setShowNewItemModal(true); }}
               />
             </div>
-
-            <Toolbar
-              searchQuery={searchQuery}
-              setSearchQuery={setSearchQuery}
-              onClearSearch={() => { setSearchQuery(""); setSearchResults(null); }}
-              sortBy={sortBy}
-              setSortBy={setSortBy}
-              viewMode={viewMode}
-              setViewMode={setViewMode}
-              isNewMenuOpen={isNewMenuOpen}
-              setIsNewMenuOpen={setIsNewMenuOpen}
-              onNewFolder={() => setShowNewFolderModal(true)}
-              onNewNote={(type) => { setNewItemType(type); setShowNewItemModal(true); }}
-            />
           </div>
-        </div>
-      </header>
+        </header>
 
-      <main className="flex-1 p-8 overflow-y-auto relative z-0">
-        {searchResults ? (
-          <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold text-white flex items-center gap-3">
-                  <Search size={22} className="text-indigo-400" />
-                  Search Results
-                </h2>
-                <p className="text-white/40 text-sm mt-1">Found {searchResults.length} matching items</p>
-              </div>
-              <button
-                onClick={() => setSearchResults(null)}
-                className="flex items-center gap-2 text-white/40 hover:text-white transition-colors bg-white/5 px-4 py-2 rounded-xl"
-              >
-                <ArrowLeft size={16} /> Clear Search
-              </button>
-            </div>
-
-            <div className={cn("grid gap-6", viewMode === 'grid' ? "grid-cols-[repeat(auto-fill,minmax(200px,1fr))]" : "grid-cols-1")}>
-              {searchResults.map((res) => (
-                res.isFolder ? (
-                  <FolderItem
-                    key={res.id}
-                    folder={{ id: res.id, name: res.name, isLocked: false, parentId: res.parentId || null, orderIndex: 0, createdAt: "", updatedAt: "" }}
-                    viewMode={viewMode}
-                    imgSrc={getImageSrc(res.imageUrl)}
-                    onClick={() => handleFolderClick(res as any)}
-                    onDelete={() => { }}
-                    draggable={false}
-                    isDragging={false}
-                    dropPosition={null}
-                    onDragStart={() => { }}
-                    onDragOver={() => { }}
-                    onDragLeave={(_e) => { }}
-                    onDrop={() => { }}
-                  />
-                ) : (
-                  <NoteItem
-                    key={res.id}
-                    item={{ id: res.id, title: res.name, content: res.content || "", imageUrl: res.imageUrl, folderId: res.parentId || null, itemType: (res.itemType as ItemType) || 'NOTE', orderIndex: 0, createdAt: "", updatedAt: "" }}
-                    viewMode={viewMode}
-                    imgSrc={getImageSrc(res.imageUrl)}
-                    onClick={() => openItemDetail(res as any)}
-                    onOpenLink={openLink}
-                    draggable={false}
-                    isDragging={false}
-                    dropPosition={null}
-                    onDragStart={() => { }}
-                    onDragOver={() => { }}
-                    onDragLeave={(_e) => { }}
-                    onDrop={() => { }}
-                  />
-                )
-              ))}
-            </div>
-            {searchResults.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-20 text-white/20">
-                <Search size={64} className="mb-4 stroke-[1]" />
-                <p className="text-xl font-medium">No results found for "{searchQuery}"</p>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className={cn("max-w-7xl mx-auto grid gap-6", viewMode === 'grid' ? "grid-cols-[repeat(auto-fill,minmax(200px,1fr))]" : "grid-cols-1")}>
+        <main className="flex-1 p-8 overflow-y-auto relative z-0">
+          <div
+            className={cn("max-w-7xl mx-auto grid gap-6", viewMode === 'grid' ? "" : "grid-cols-1")}
+            style={viewMode === 'grid' ? { gridTemplateColumns: `repeat(auto-fill, minmax(${tileIconSize}px, 1fr))` } : {}}
+          >
             {getUnifiedSorted().map(entry => (
               entry.kind === 'folder' && entry.folder ? (
                 <FolderItem
@@ -769,137 +735,148 @@ export default function App() {
               ) : null
             ))}
           </div>
-        )}
-      </main>
+        </main>
 
-      <PasswordPrompt
-        isOpen={passwordPrompt.isOpen}
-        passwordInput={passwordInput}
-        setPasswordInput={setPasswordInput}
-        onCancel={() => setPasswordPrompt({ isOpen: false, targetFolderId: null })}
-        onSubmit={submitPassword}
-      />
+        <PasswordPrompt
+          isOpen={passwordPrompt.isOpen}
+          passwordInput={passwordInput}
+          setPasswordInput={setPasswordInput}
+          onCancel={() => setPasswordPrompt({ isOpen: false, targetFolderId: null })}
+          onSubmit={submitPassword}
+        />
 
-      <NewFolderModal
-        isOpen={showNewFolderModal}
-        onClose={() => { setShowNewFolderModal(false); setNewFolderDescription(""); setNewFolderImageFilename(""); }}
-        folderName={newFolderName}
-        setFolderName={setNewFolderName}
-        folderDescription={newFolderDescription}
-        setFolderDescription={setNewFolderDescription}
-        encrypt={newFolderEncrypt}
-        setEncrypt={setNewFolderEncrypt}
-        password={newFolderPassword}
-        setPassword={setNewFolderPassword}
-        imageFilename={newFolderImageFilename}
-        onPickImage={async () => { const img = await pickImage(); if (img) setNewFolderImageFilename(img); }}
-        onPasteImage={async (e) => {
-          const items = e.clipboardData.items;
-          for (const item of items) {
-            if (item.type.startsWith('image/')) {
-              const file = item.getAsFile();
-              if (file) {
+        <NewFolderModal
+          isOpen={showNewFolderModal}
+          onClose={() => { setShowNewFolderModal(false); setNewFolderDescription(""); setNewFolderImageFilename(""); }}
+          folderName={newFolderName}
+          setFolderName={setNewFolderName}
+          folderDescription={newFolderDescription}
+          setFolderDescription={setNewFolderDescription}
+          encrypt={newFolderEncrypt}
+          setEncrypt={setNewFolderEncrypt}
+          password={newFolderPassword}
+          setPassword={setNewFolderPassword}
+          imageFilename={newFolderImageFilename}
+          onPickImage={async () => { const img = await pickImage(); if (img) setNewFolderImageFilename(img); }}
+          onPasteImage={async (e) => {
+            const items = e.clipboardData.items;
+            for (const item of items) {
+              if (item.type.startsWith('image/')) {
+                const file = item.getAsFile();
+                if (file) {
+                  const reader = new FileReader();
+                  reader.onload = async (event) => {
+                    const b64 = event.target?.result as string;
+                    try {
+                      const filename = await invoke<string>("save_base64_image", { base64Data: b64 });
+                      setNewFolderImageFilename(filename);
+                    } catch (err) { alert("Failed to save pasted image: " + err); }
+                  };
+                  reader.readAsDataURL(file);
+                }
+              }
+            }
+          }}
+          onCreate={handleCreateFolder}
+        />
+
+        <EditFolderModal
+          isOpen={showEditFolderModal}
+          onClose={() => { setShowEditFolderModal(false); setNewFolderPassword(""); setNewFolderDescription(""); setNewFolderImageFilename(""); }}
+          folderName={newFolderName}
+          setFolderName={setNewFolderName}
+          folderDescription={newFolderDescription}
+          setFolderDescription={setNewFolderDescription}
+          encrypt={newFolderEncrypt}
+          setEncrypt={setNewFolderEncrypt}
+          password={newFolderPassword}
+          setPassword={setNewFolderPassword}
+          imageFilename={newFolderImageFilename}
+          onPickImage={async () => { const img = await pickImage(); if (img) setNewFolderImageFilename(img); }}
+          onPasteImage={async (e) => {
+            const items = e.clipboardData.items;
+            for (const item of items) {
+              if (item.type.startsWith('image/')) {
+                const file = item.getAsFile();
+                if (file) {
+                  const reader = new FileReader();
+                  reader.onload = async (event) => {
+                    const b64 = event.target?.result as string;
+                    try {
+                      const filename = await invoke<string>("save_base64_image", { base64Data: b64 });
+                      setNewFolderImageFilename(filename);
+                    } catch (err) { alert("Failed to save pasted image: " + err); }
+                  };
+                  reader.readAsDataURL(file);
+                }
+              }
+            }
+          }}
+          onSave={handleEditFolder}
+        />
+
+        <NewItemModal
+          isOpen={showNewItemModal}
+          onClose={() => setShowNewItemModal(false)}
+          title={newItemTitle}
+          setTitle={setNewItemTitle}
+          url={newItemUrl}
+          setUrl={setNewItemUrl}
+          content={newItemContent}
+          setContent={setNewItemContent}
+          imageFilename={newItemImageFilename}
+          setImageFilename={setNewItemImageFilename}
+          onPickImage={async () => { const f = await pickImage(); if (f) setNewItemImageFilename(f); }}
+          onPasteImage={async (e) => {
+            const items = (e as any).clipboardData.items;
+            for (let i = 0; i < items.length; i++) {
+              if (items[i].type.indexOf('image') !== -1) {
+                e.preventDefault();
+                const file = items[i].getAsFile();
+                if (!file) continue;
                 const reader = new FileReader();
                 reader.onload = async (event) => {
-                  const b64 = event.target?.result as string;
+                  const base64Data = event.target?.result as string;
                   try {
-                    const filename = await invoke<string>("save_base64_image", { base64Data: b64 });
-                    setNewFolderImageFilename(filename);
+                    const filename = await invoke<string>("save_base64_image", { base64Data });
+
+                    if ((e.target as any).tagName === 'TEXTAREA' || (e.target as any).id === 'new-item-content') {
+                      const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
+                      const start = txt ? txt.selectionStart : newItemContent.length;
+                      setNewItemContent(prev => prev.substring(0, start) + `\n![pasted image](${filename})\n` + prev.substring(start));
+                    } else {
+                      setNewItemImageFilename(filename);
+                    }
                   } catch (err) { alert("Failed to save pasted image: " + err); }
                 };
                 reader.readAsDataURL(file);
+                break;
               }
             }
-          }
-        }}
-        onCreate={handleCreateFolder}
-      />
+          }}
+          onCreate={handleCreateItem}
+        />
 
-      <EditFolderModal
-        isOpen={showEditFolderModal}
-        onClose={() => { setShowEditFolderModal(false); setNewFolderPassword(""); setNewFolderDescription(""); setNewFolderImageFilename(""); }}
-        folderName={newFolderName}
-        setFolderName={setNewFolderName}
-        folderDescription={newFolderDescription}
-        setFolderDescription={setNewFolderDescription}
-        encrypt={newFolderEncrypt}
-        setEncrypt={setNewFolderEncrypt}
-        password={newFolderPassword}
-        setPassword={setNewFolderPassword}
-        imageFilename={newFolderImageFilename}
-        onPickImage={async () => { const img = await pickImage(); if (img) setNewFolderImageFilename(img); }}
-        onPasteImage={async (e) => {
-          const items = e.clipboardData.items;
-          for (const item of items) {
-            if (item.type.startsWith('image/')) {
-              const file = item.getAsFile();
-              if (file) {
-                const reader = new FileReader();
-                reader.onload = async (event) => {
-                  const b64 = event.target?.result as string;
-                  try {
-                    const filename = await invoke<string>("save_base64_image", { base64Data: b64 });
-                    setNewFolderImageFilename(filename);
-                  } catch (err) { alert("Failed to save pasted image: " + err); }
-                };
-                reader.readAsDataURL(file);
-              }
-            }
-          }
-        }}
-        onSave={handleEditFolder}
-      />
+        <ConfirmDeleteModal
+          isOpen={deleteModal.isOpen}
+          onClose={() => setDeleteModal({ isOpen: false, type: 'folder', id: '', name: '' })}
+          onConfirm={executeDelete}
+          type={deleteModal.type}
+          name={deleteModal.name}
+          isBusy={isBusy}
+        />
+      </div>
 
-      <NewItemModal
-        isOpen={showNewItemModal}
-        onClose={() => setShowNewItemModal(false)}
-        title={newItemTitle}
-        setTitle={setNewItemTitle}
-        url={newItemUrl}
-        setUrl={setNewItemUrl}
-        content={newItemContent}
-        setContent={setNewItemContent}
-        imageFilename={newItemImageFilename}
-        setImageFilename={setNewItemImageFilename}
-        onPickImage={async () => { const f = await pickImage(); if (f) setNewItemImageFilename(f); }}
-        onPasteImage={async (e) => {
-          const items = (e as any).clipboardData.items;
-          for (let i = 0; i < items.length; i++) {
-            if (items[i].type.indexOf('image') !== -1) {
-              e.preventDefault();
-              const file = items[i].getAsFile();
-              if (!file) continue;
-              const reader = new FileReader();
-              reader.onload = async (event) => {
-                const base64Data = event.target?.result as string;
-                try {
-                  const filename = await invoke<string>("save_base64_image", { base64Data });
-
-                  if ((e.target as any).tagName === 'TEXTAREA' || (e.target as any).id === 'new-item-content') {
-                    const txt = document.getElementById('new-item-content') as HTMLTextAreaElement;
-                    const start = txt ? txt.selectionStart : newItemContent.length;
-                    setNewItemContent(prev => prev.substring(0, start) + `\n![pasted image](${filename})\n` + prev.substring(start));
-                  } else {
-                    setNewItemImageFilename(filename);
-                  }
-                } catch (err) { alert("Failed to save pasted image: " + err); }
-              };
-              reader.readAsDataURL(file);
-              break;
-            }
-          }
-        }}
-        onCreate={handleCreateItem}
-      />
-
-      <ConfirmDeleteModal
-        isOpen={deleteModal.isOpen}
-        onClose={() => setDeleteModal({ isOpen: false, type: 'folder', id: '', name: '' })}
-        onConfirm={executeDelete}
-        type={deleteModal.type}
-        name={deleteModal.name}
-        isBusy={isBusy}
-      />
+      {/* Pane 3: Inline Detail Pane (Right) */}
+      {!openInNewWindow && selectedItemId && selectedItemFull && (
+        <div className="w-[45vw] max-w-[800px] min-w-[400px] shrink-0 border-l border-white/10 bg-slate-950/80 backdrop-blur-3xl flex flex-col relative z-20 shadow-[-20px_0_40px_rgba(0,0,0,0.3)]">
+          <InlineDetailView
+            item={{ ...selectedItemFull, folderKey: currentFolderKey, rootFolderId: rootLockedFolderId }}
+            onClose={() => setSelectedItemId(null)}
+            onDataRefresh={loadData}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -26,7 +26,6 @@ export function NewItemModal({
     content,
     setContent,
     imageFilename,
-    setImageFilename,
     onPickImage,
     onPasteImage,
     onCreate
